@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Playwright MCP benchmark artifacts
+.playwright-mcp/
+
+# Unrelated file (not part of this project)
+PrivaSearch.html
+
+# Logs / OS cruft
+*.log
+.DS_Store
+Thumbs.db
