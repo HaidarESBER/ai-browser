@@ -114,7 +114,7 @@ Today's AI browsers loop `screenshot → vision model → decide → act`, payin
 
 **npm library:**
 ```ts
-import { AIBrowser } from "ai-browser";
+import { AIBrowser } from "ecobrowser";
 
 const browser = await AIBrowser.launch();          // local Chromium via CDP
 const page = await browser.newPage();
@@ -127,7 +127,7 @@ const data = await page.extract({ products: [{ name: "string", price: "number" }
 page.on("console", (log) => { /* stream / react to page errors */ });
 ```
 
-**MCP server:** every method above is exposed as an MCP tool (`browser_navigate`, `browser_snapshot`, `browser_click`, `browser_extract`, `browser_console`, …). Launch with `npx ai-browser-mcp`; any MCP client connects and the tools appear. Tool descriptions are written for a model to consume — token-lean, with clear affordances.
+**MCP server:** every method above is exposed as an MCP tool (`browser_navigate`, `browser_snapshot`, `browser_click`, `browser_extract`, `browser_console`, …). Launch with `npx ecobrowser-mcp`; any MCP client connects and the tools appear. Tool descriptions are written for a model to consume — token-lean, with clear affordances.
 
 ---
 
@@ -170,12 +170,13 @@ page.on("console", (log) => { /* stream / react to page errors */ });
 | M5 | **Observability** | Loopback live view (screenshot + action trace) | ✅ done |
 | — | **AI-friendliness** | `find()`, state flags, diff-by-default, action-scoped console, durable ids | ✅ done |
 | — | **Hardening** | Loopback bind, XSS-safe trace, nav guard, log caps, timeouts, crash recovery, port fallback | ✅ done |
-| M2 | **npm library** | Clean public entry point + build; published package | ⏳ next |
-| M6 | **Auth/proxy/CAPTCHA (BYO, scoped)** | Save auth state; proxy config; opt-in CAPTCHA hook | ⏳ later |
+| M2 | **npm library** | Clean public entry point + build; package `ecobrowser` with `ecobrowser-mcp` bin | ✅ done |
+| M6 | **Auth/proxy/CAPTCHA (BYO, scoped)** | Save auth state; proxy config; opt-in CAPTCHA hook | ⏳ next |
 
 The open-source engine + MCP server (M0–M5 plus the reliability/AI-friendliness/hardening
-passes) are **built and tested**. **M2 (npm packaging)** is the next milestone; M6 is opt-in and
-user-owned (§8).
+passes) and the **npm package (M2)** are **built and tested** — one package, `ecobrowser`,
+exposing the library via `import { AIBrowser } from "ecobrowser"` and the MCP server via the
+`ecobrowser-mcp` bin. M6 is opt-in and user-owned (§8).
 
 ### Beyond the original roadmap (built)
 
@@ -211,7 +212,7 @@ Because it's a **downloadable framework the user runs themselves**, the operatio
 
 ## 10. Open questions
 
-- Package boundary: one package with an MCP entry, or `core` + `mcp` as separate npm packages?
+- ~~Package boundary: one package with an MCP entry, or `core` + `mcp` as separate npm packages?~~ **Resolved (M2):** one package — `ecobrowser` — exporting the library, with the MCP server as its `ecobrowser-mcp` bin.
 - Snapshot format: adopt an existing a11y-tree serialization or design a bespoke token-lean schema?
 - Bundle a Chromium (like Playwright) or require the user's, to keep install light?
 - Remote/cloud driver: worth a thin abstraction in the core now, or defer entirely?

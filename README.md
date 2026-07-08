@@ -1,19 +1,20 @@
 <div align="center">
 
-# 🌐 AI-Native Browser Framework
+# 🌐 ecobrowser — AI-Native Browser Framework
 
 ### The AI's hands and eyes on the web
 
 **A browser built to be driven by an AI** — the perception and action layer that gives an agent
-fast, complete, *verifiable* control of the web. Ships as a **TypeScript library** and an **MCP server**.
+fast, complete, *verifiable* control of the web. Ships on npm as **`ecobrowser`**: a **TypeScript library** and an **MCP server** in one package.
 
+![npm](https://img.shields.io/badge/npm-ecobrowser-CB3837?logo=npm&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)
 ![Node](https://img.shields.io/badge/Node-18%2B-339933?logo=node.js&logoColor=white)
 ![Playwright](https://img.shields.io/badge/engine-Playwright%20·%20Chromium-2EAD33?logo=playwright&logoColor=white)
 ![MCP](https://img.shields.io/badge/protocol-MCP%20server-6E56CF)
 ![Tools](https://img.shields.io/badge/MCP%20tools-13-6E56CF)
 ![Tests](https://img.shields.io/badge/tests-16%20passing-brightgreen)
-![Status](https://img.shields.io/badge/status-pre--release-orange)
+![License](https://img.shields.io/badge/license-MIT-blue)
 
 *Structured (no-pixel) perception · verified self-healing actions · incremental diff perception · a live view to watch it work.*
 
@@ -149,8 +150,8 @@ It's **an MCP server** because it registers schema-typed tools and answers `init
 **Prerequisites:** Node.js 18+.
 
 ```bash
-npm install
-npx playwright install chromium
+npm install ecobrowser
+npx playwright install chromium   # one-time browser download
 ```
 
 ### Option A — as an MCP server (drive it from an AI)
@@ -160,27 +161,29 @@ npx playwright install chromium
 ```json
 {
   "mcpServers": {
-    "ai-browser": {
+    "ecobrowser": {
       "command": "npx",
-      "args": ["tsx", "C:\\Users\\haida\\browser\\src\\mcp.ts"],
+      "args": ["-y", "ecobrowser-mcp"],
       "env": { "AI_BROWSER_HEADED": "1" }
     }
   }
 }
 ```
 
-**Claude Code** — from this directory:
+**Claude Code:**
 
 ```bash
-claude mcp add ai-browser -- npx tsx C:\Users\haida\browser\src\mcp.ts
+claude mcp add ecobrowser -- npx -y ecobrowser-mcp
 ```
 
 Restart the client, then just ask: *"navigate to example.com and list the links."*
 
+*(Working from a clone instead of the published package? Point the client at the source directly: `npx tsx <repo>/src/mcp.ts`.)*
+
 ### Option B — as a TypeScript library
 
 ```ts
-import { AIBrowser } from "./src/browser.js";
+import { AIBrowser } from "ecobrowser";
 
 const browser = await AIBrowser.launch({ headless: true });
 const page = await browser.newPage();
@@ -265,12 +268,14 @@ Playwright MCP   █████████████████████
 ## 📜 Scripts
 
 ```bash
-npm test        # unit tests (diff, find, state, url-guard) — no browser needed
-npm run demo    # exercises the engine directly (headed; AI_BROWSER_HEADED=0 for headless)
-npm run smoke   # spawns the MCP server as a real MCP client and drives it
-npm run live    # starts the live view and verifies its endpoints
-npm run bench   # head-to-head vs Playwright MCP
-npm run mcp     # run the MCP server on stdio
+npm test           # unit tests (diff, find, state, url-guard) — no browser needed
+npm run build      # compile the publishable package to dist/ (library + MCP bin)
+npm run typecheck  # tsc --noEmit over everything, dev scripts included
+npm run demo       # exercises the engine directly (headed; AI_BROWSER_HEADED=0 for headless)
+npm run smoke      # spawns the MCP server as a real MCP client and drives it
+npm run live       # starts the live view and verifies its endpoints
+npm run bench      # head-to-head vs Playwright MCP
+npm run mcp        # run the MCP server on stdio
 ```
 
 > **Benchmark note:** Playwright MCP is a `devDependency`; install its browser once with
@@ -282,16 +287,20 @@ npm run mcp     # run the MCP server on stdio
 
 ```
 src/
+  index.ts         # public package entry — re-exports the engine + LiveView
   browser.ts       # the core engine — AIBrowser / AIPage (this is the whole product)
-  mcp.ts           # MCP server: registers the engine's methods as 13 tools
+  mcp.ts           # MCP server: registers the engine's methods as 13 tools (the ecobrowser-mcp bin)
   live.ts          # live-view server (screenshot + action trace)
-  index.ts         # in-code engine demo (5 parts, incl. self-healing)
+  demo.ts          # in-code engine demo (5 parts, incl. self-healing)
   mcp-smoke.ts     # end-to-end MCP client test
   live-smoke.ts    # live-view endpoint test
   bench-h2h.ts     # head-to-head benchmark vs Playwright MCP
   test.ts          # unit tests for the pure logic
+tsconfig.build.json # build config — compiles only the public surface to dist/
 SPEC.md            # full technical specification, north star, roadmap
 ```
+
+Only `dist/` (plus README, SPEC, LICENSE) ships in the npm tarball — the dev scripts stay in the repo.
 
 ---
 
@@ -311,16 +320,16 @@ Deliberately **not** in scope: multi-tenant hosting, auth/session isolation betw
 
 ```mermaid
 flowchart LR
-    M0["M0 · spike"] --> M1["M1 · engine"] --> REL["reliability<br/>+ self-heal"] --> M3["M3 · MCP"] --> M4["M4 · speed"] --> M5["M5 · live view"] --> AIF["AI-friendliness"] --> HARD["hardening"] --> M2["M2 · npm<br/>📦 next"] --> M6["M6 · auth/proxy<br/>(BYO)"]
+    M0["M0 · spike"] --> M1["M1 · engine"] --> REL["reliability<br/>+ self-heal"] --> M3["M3 · MCP"] --> M4["M4 · speed"] --> M5["M5 · live view"] --> AIF["AI-friendliness"] --> HARD["hardening"] --> M2["M2 · npm<br/>package"] --> M6["M6 · auth/proxy<br/>(BYO) 📦 next"]
 
     classDef done fill:#1e3a2e,stroke:#a6e3a1,color:#a6e3a1;
     classDef next fill:#3a2e1e,stroke:#f9e2af,color:#f9e2af;
-    class M0,M1,REL,M3,M4,M5,AIF,HARD done;
-    class M2 next;
+    class M0,M1,REL,M3,M4,M5,AIF,HARD,M2 done;
+    class M6 next;
 ```
 
-Built and tested: the engine, reliability + self-healing, the MCP server, caching + diff perception, the live view, the AI-friendliness pass, and the hardening pass.
-**Next — M2:** publish as an installable npm package. **Later — M6:** opt-in, BYO-key auth/proxy/CAPTCHA for authorized sites.
+Built and tested: the engine, reliability + self-healing, the MCP server, caching + diff perception, the live view, the AI-friendliness pass, the hardening pass, and the npm package (`ecobrowser`, with the `ecobrowser-mcp` bin).
+**Next — M6:** opt-in, BYO-key auth/proxy/CAPTCHA for authorized sites.
 
 See [`SPEC.md`](./SPEC.md) for the full specification and north star.
 

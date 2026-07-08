@@ -90,9 +90,9 @@ async function getPage(): Promise<AIPage> {
       live = new LiveView(page);
       try {
         const url = await live.start();
-        console.error(`[ai-browser] live view: ${url}`);
+        console.error(`[ecobrowser] live view: ${url}`);
       } catch (err) {
-        console.error(`[ai-browser] live view unavailable: ${(err as Error).message}`);
+        console.error(`[ecobrowser] live view unavailable: ${(err as Error).message}`);
         live = null; // S7: don't retain a LiveView that never bound
       }
     }
@@ -161,7 +161,7 @@ function formatDiff(d: SnapshotDiff): string {
   return lines.join("\n");
 }
 
-const server = new McpServer({ name: "ai-browser", version: "0.1.0" });
+const server = new McpServer({ name: "ecobrowser", version: "0.1.0" });
 
 // ---- SEE / NAVIGATE -------------------------------------------------------
 
@@ -364,14 +364,14 @@ process.on("SIGINT", () => void shutdown(0));
 process.on("SIGTERM", () => void shutdown(0));
 // S8: never leave a browser orphaned on an unexpected fault — clean up and exit.
 process.on("uncaughtException", (err) => {
-  console.error(`[ai-browser] uncaught exception: ${err.stack ?? err}`);
+  console.error(`[ecobrowser] uncaught exception: ${err.stack ?? err}`);
   void shutdown(1);
 });
 process.on("unhandledRejection", (reason) => {
-  console.error(`[ai-browser] unhandled rejection: ${String(reason)}`);
+  console.error(`[ecobrowser] unhandled rejection: ${String(reason)}`);
   void shutdown(1);
 });
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-console.error("[ai-browser] MCP server ready on stdio.");
+console.error("[ecobrowser] MCP server ready on stdio.");

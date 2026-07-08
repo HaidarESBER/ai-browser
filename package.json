@@ -1,16 +1,56 @@
 {
-  "name": "ai-browser",
-  "version": "0.0.0",
-  "private": true,
+  "name": "ecobrowser",
+  "version": "0.1.0",
   "type": "module",
-  "description": "AI-native browser framework — the AI's hands and eyes on the web (M0 spike)",
+  "description": "AI-native browser framework — the AI's hands and eyes on the web. Structured (no-pixel) perception, verified self-healing actions, incremental diff perception, a live view — as a TypeScript library and an MCP server.",
+  "keywords": [
+    "ai",
+    "browser",
+    "browser-automation",
+    "agent",
+    "llm",
+    "mcp",
+    "mcp-server",
+    "playwright",
+    "accessibility",
+    "scraping"
+  ],
+  "license": "MIT",
+  "author": "Haidar Esber (https://github.com/HaidarESBER)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HaidarESBER/ai-browser.git"
+  },
+  "homepage": "https://github.com/HaidarESBER/ai-browser#readme",
+  "bugs": "https://github.com/HaidarESBER/ai-browser/issues",
+  "engines": {
+    "node": ">=18"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "ecobrowser-mcp": "dist/mcp.js"
+  },
+  "files": [
+    "dist",
+    "SPEC.md"
+  ],
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
     "test": "tsx src/test.ts",
-    "demo": "tsx src/index.ts",
+    "demo": "tsx src/demo.ts",
     "mcp": "tsx src/mcp.ts",
     "smoke": "tsx src/mcp-smoke.ts",
     "live": "tsx src/live-smoke.ts",
-    "bench": "tsx src/bench-h2h.ts"
+    "bench": "tsx src/bench-h2h.ts",
+    "prepublishOnly": "npm test && npm run build"
   },
   "devDependencies": {
     "@playwright/mcp": "^0.0.77",
