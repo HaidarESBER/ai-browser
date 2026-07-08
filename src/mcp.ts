@@ -161,7 +161,7 @@ function formatDiff(d: SnapshotDiff): string {
   return lines.join("\n");
 }
 
-const server = new McpServer({ name: "ecobrowser", version: "0.1.0" });
+const server = new McpServer({ name: "ecobrowser", version: "0.1.1" });
 
 // ---- SEE / NAVIGATE -------------------------------------------------------
 
