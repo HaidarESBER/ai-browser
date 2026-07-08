@@ -51,6 +51,14 @@ export interface Link {
   href: string;
 }
 
+/** Options for goto() — escape hatches for slow or bot-wary sites. */
+export interface GotoOptions {
+  /** Navigation timeout in ms (Playwright default: 30 000). */
+  timeoutMs?: number;
+  /** When to consider navigation done (default "load"; "domcontentloaded" or "commit" for pages that never settle). */
+  waitUntil?: "load" | "domcontentloaded" | "commit" | "networkidle";
+}
+
 /** Options controlling the reliability wrapper around an action. */
 export interface ReliabilityOptions {
   retries?: number;
@@ -173,22 +181,63 @@ export function computeSnapshotDiff(prev: Snapshot, next: Snapshot): SnapshotDif
 }
 
 /**
+ * Query words that describe the KIND of element rather than its name
+ * ("search box" names nothing containing the word "box" — it means an input).
+ * Each maps to the tags/roles it implies.
+ */
+const KIND_HINTS: Record<string, string[]> = {
+  box: ["input", "textarea", "select", "searchbox", "textbox", "combobox"],
+  field: ["input", "textarea", "searchbox", "textbox"],
+  input: ["input", "textarea", "searchbox", "textbox"],
+  textbox: ["input", "textarea", "searchbox", "textbox"],
+  textarea: ["textarea"],
+  button: ["button"],
+  btn: ["button"],
+  link: ["a", "link"],
+  checkbox: ["input", "checkbox"],
+  radio: ["input", "radio"],
+  dropdown: ["select", "combobox", "listbox"],
+};
+
+/**
  * Score how well an element matches a natural-language query. Deterministic —
- * no LLM — so `find()` is cheap. Exact-name beats prefix beats substring beats
- * all-words-present.
+ * no LLM — so `find()` is cheap. Kind words ("box", "button", "link") are
+ * matched against the element's tag/role — a kind match boosts, a kind
+ * mismatch demotes (so "search box" ranks the search input above the Search
+ * button). The remaining words score against the accessible name:
+ * exact beats prefix beats substring beats all-words-present.
  */
 export function elementMatchScore(e: SnapshotElement, query: string): number {
   const q = query.toLowerCase().trim();
   if (!q) return 0;
   const name = e.name.toLowerCase();
   const hay = `${name} ${e.role} ${e.tag}`.toLowerCase();
-  if (name === q) return 100;
-  if (name.startsWith(q)) return 70;
-  if (name.includes(q)) return 50;
-  const words = q.split(/\s+/).filter(Boolean);
-  if (words.length && words.every((w) => hay.includes(w))) return 30;
-  if (hay.includes(q)) return 20;
-  return 0;
+
+  const kinds = new Set<string>();
+  const nameWords: string[] = [];
+  for (const w of q.split(/\s+/).filter(Boolean)) {
+    const hint = KIND_HINTS[w];
+    if (hint) hint.forEach((k) => kinds.add(k));
+    else nameWords.push(w);
+  }
+  const kindMatch = kinds.size
+    ? kinds.has(e.tag.toLowerCase()) || kinds.has(e.role.toLowerCase())
+    : null;
+
+  const target = nameWords.join(" ");
+  if (!target) return kindMatch ? 40 : 0; // query was only kind words, e.g. "button"
+
+  let base = 0;
+  if (name === target) base = 100;
+  else if (name.startsWith(target)) base = 70;
+  else if (name.includes(target)) base = 50;
+  else if (nameWords.every((w) => hay.includes(w))) base = 30;
+  else if (hay.includes(q)) base = 20;
+  if (base === 0) return 0;
+
+  if (kindMatch === true) base += 20;
+  if (kindMatch === false) base -= 40;
+  return Math.max(0, base);
 }
 
 /**
@@ -205,6 +254,10 @@ export class AIPage {
   private lastSnapshot: Snapshot | null = null;
   private lastDomVersion = -1;
 
+  // The navigation's own document response — held aside so the per-page log
+  // wipe below doesn't erase the very request that produced the current page.
+  private pendingDocResponse: NetworkEntry | null = null;
+
   constructor(public readonly page: Page) {
     // CHECK: tap console + page errors + network as they happen (first-class).
     page.on("console", (msg) =>
@@ -213,23 +266,58 @@ export class AIPage {
     page.on("pageerror", (err) =>
       this.pushCapped(this.consoleLog, { type: "error", text: err.message, ts: Date.now() }),
     );
-    page.on("response", (res) =>
-      this.pushCapped(this.networkLog, {
+    page.on("response", (res) => {
+      const entry: NetworkEntry = {
         method: res.request().method(),
         url: res.url(),
         status: res.status(),
         ts: Date.now(),
-      }),
-    );
-    // Logs describe the CURRENT page: reset them when the main frame navigates.
+      };
+      const req = res.request();
+      if (req.isNavigationRequest() && req.frame() === page.mainFrame()) {
+        this.pendingDocResponse = entry;
+      }
+      this.pushCapped(this.networkLog, entry);
+    });
+    // Logs describe the CURRENT page: reset them when the main frame navigates —
+    // but keep the document request itself, so network() is never empty after goto().
     page.on("framenavigated", (frame) => {
-      if (frame === this.page.mainFrame()) this.clearLogs();
+      if (frame !== this.page.mainFrame()) return;
+      this.clearLogs();
+      if (this.pendingDocResponse) {
+        this.networkLog.push(this.pendingDocResponse);
+        this.pendingDocResponse = null;
+      }
     });
   }
 
   private pushCapped<T>(log: T[], entry: T): void {
     log.push(entry);
     if (log.length > MAX_LOG) log.shift();
+  }
+
+  /**
+   * Run an in-page evaluation that survives a navigation racing it. The
+   * canonical agent pattern — type, press Enter, look — destroys the JS
+   * execution context mid-look; instead of letting that escape as a crash,
+   * wait for the new document and retry. (Absorb the recovery in code so the
+   * model doesn't have to.)
+   */
+  private async withContextRetry<T>(run: () => Promise<T>, attempts = 3): Promise<T> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await run();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const contextLost =
+          /execution context was destroyed|cannot find context|frame was detached|navigation/i.test(
+            message,
+          );
+        if (!contextLost || attempt >= attempts) throw err;
+        await this.page.waitForLoadState("domcontentloaded").catch(() => undefined);
+        await sleep(150 * attempt);
+      }
+    }
   }
 
   // ---- SEE ----------------------------------------------------------------
@@ -270,7 +358,7 @@ export class AIPage {
   }
 
   private async buildSnapshot(): Promise<Snapshot> {
-    const elements = await this.page.evaluate(() => {
+    const elements = await this.withContextRetry(() => this.page.evaluate(() => {
       const SELECTOR =
         'a, button, input, textarea, select, [role="button"], [role="link"], [onclick]';
       const results: SnapshotElement[] = [];
@@ -298,10 +386,17 @@ export class AIPage {
           el.setAttribute("data-ai-id", id);
         }
 
+        // .labels covers both <label for=…> and label-wrapped inputs, which
+        // otherwise have no accessible name at all (common on plain HTML forms).
+        const labels = (el as HTMLInputElement).labels;
+        const labelText = labels?.length
+          ? (labels[0].innerText || labels[0].textContent || "").trim().replace(/\s+/g, " ")
+          : "";
         const name =
           (el as HTMLElement).innerText?.trim() ||
           el.getAttribute("aria-label") ||
           el.getAttribute("placeholder") ||
+          labelText ||
           el.getAttribute("title") ||
           "";
 
@@ -343,7 +438,7 @@ export class AIPage {
         results.push(entry);
       }
       return results;
-    });
+    }));
 
     return { url: this.page.url(), title: await this.page.title(), elements };
   }
@@ -354,7 +449,7 @@ export class AIPage {
    * tagging so building a snapshot never invalidates its own cache.
    */
   private async domVersion(): Promise<number> {
-    return this.page.evaluate(() => {
+    return this.withContextRetry(() => this.page.evaluate(() => {
       const w = window as unknown as { __aiDomVersion?: number };
       if (w.__aiDomVersion === undefined) {
         w.__aiDomVersion = 0;
@@ -372,7 +467,7 @@ export class AIPage {
         });
       }
       return w.__aiDomVersion;
-    });
+    }));
   }
 
   /** Pixels, on demand only — for when structure isn't enough. */
@@ -382,7 +477,7 @@ export class AIPage {
 
   /** Full visible text of the page. */
   async readText(): Promise<string> {
-    return this.page.evaluate(() => document.body.innerText);
+    return this.withContextRetry(() => this.page.evaluate(() => document.body.innerText));
   }
 
   /**
@@ -437,13 +532,13 @@ export class AIPage {
 
   // ---- NAVIGATE -----------------------------------------------------------
 
-  async goto(url: string): Promise<void> {
+  async goto(url: string, opts: GotoOptions = {}): Promise<void> {
     if (isBlockedNavigation(url, process.env.AI_BROWSER_ALLOW_LOCAL === "1")) {
       throw new Error(
         `navigation to "${url}" is blocked (local-file/privileged scheme). Set AI_BROWSER_ALLOW_LOCAL=1 to allow.`,
       );
     }
-    await this.page.goto(url);
+    await this.page.goto(url, { timeout: opts.timeoutMs, waitUntil: opts.waitUntil });
     this.record("navigate", url);
   }
 
@@ -525,11 +620,13 @@ export class AIPage {
 
   /** Deterministic extraction of all links (LLM-schema extraction comes later). */
   async extractLinks(): Promise<Link[]> {
-    return this.page.evaluate(() =>
-      Array.from(document.querySelectorAll("a[href]")).map((a) => ({
-        name: (a as HTMLElement).innerText.trim().slice(0, 120),
-        href: (a as HTMLAnchorElement).href,
-      })),
+    return this.withContextRetry(() =>
+      this.page.evaluate(() =>
+        Array.from(document.querySelectorAll("a[href]")).map((a) => ({
+          name: (a as HTMLElement).innerText.trim().slice(0, 120),
+          href: (a as HTMLAnchorElement).href,
+        })),
+      ),
     );
   }
 

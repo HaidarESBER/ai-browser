@@ -13,6 +13,7 @@ export {
   isBlockedNavigation,
   type ActionResult,
   type ConsoleEntry,
+  type GotoOptions,
   type Link,
   type NetworkEntry,
   type PageEvent,

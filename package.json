@@ -1,6 +1,6 @@
 {
   "name": "ecobrowser",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "AI-native browser framework — the AI's hands and eyes on the web. Structured (no-pixel) perception, verified self-healing actions, incremental diff perception, a live view — as a TypeScript library and an MCP server.",
   "keywords": [

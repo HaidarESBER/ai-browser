@@ -80,6 +80,29 @@ check("substring match scores > 0", () => assert.ok(elementMatchScore(el("input"
 check("all-words-present match", () => assert.ok(elementMatchScore(el("a", "Create new account"), "account create") > 0));
 check("no match scores 0", () => assert.equal(elementMatchScore(el("a", "Home"), "checkout"), 0));
 
+console.log("\nelementMatchScore (kind hints):");
+
+check("'search box' matches an input even though no element says 'box'", () =>
+  assert.ok(elementMatchScore(el("input", "Search Wikipedia"), "search box") > 0));
+check("'search box' ranks the input above the Search button", () =>
+  assert.ok(
+    elementMatchScore(el("input", "Search Wikipedia"), "search box") >
+      elementMatchScore(el("button", "Search"), "search box"),
+  ));
+check("kind mismatch demotes but keeps a strong name match", () =>
+  assert.ok(elementMatchScore(el("button", "Search"), "search box") > 0));
+check("a kind word alone matches by kind", () => {
+  assert.ok(elementMatchScore(el("button", "Go"), "button") > 0);
+  assert.equal(elementMatchScore(el("a", "Go"), "button"), 0);
+});
+check("'login button' boosts the Login button over a Login link", () =>
+  assert.ok(
+    elementMatchScore(el("button", "Login"), "login button") >
+      elementMatchScore(el("a", "Login"), "login button"),
+  ));
+check("kind hint alone never matches an unrelated name", () =>
+  assert.equal(elementMatchScore(el("input", "Email"), "search box"), 0));
+
 console.log("\ncomputeSnapshotDiff (state changes):");
 
 check("detects a checkbox toggling to checked", () => {
