@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.3 — 2026-07-09
+
+- **Added: Chromium installs automatically.** A `postinstall` hook runs `playwright install chromium`, so `npm install ecobrowser` fetches the browser with no manual step. (Installs with `--ignore-scripts` still need `npx playwright install chromium`.)
+
 ## 0.1.2 — 2026-07-09
 
 Trace and reporting fixes surfaced while producing a supervised-session recording.
