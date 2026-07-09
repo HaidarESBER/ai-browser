@@ -180,6 +180,8 @@ claude mcp add ecobrowser -- npx -y ecobrowser-mcp
 
 Restart the client, then just ask: *"navigate to example.com and list the links."*
 
+Run `npx ecobrowser-mcp --help` for setup, the full tool list, and environment variables.
+
 *(Working from a clone instead of the published package? Point the client at the source directly: `npx tsx <repo>/src/mcp.ts`.)*
 
 ### Option B — as a TypeScript library
