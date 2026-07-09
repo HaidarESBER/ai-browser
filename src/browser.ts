@@ -106,6 +106,9 @@ const sleep = (ms: number): Promise<void> =>
 /** Cap on retained console/network entries per page, to bound memory (M1). */
 const MAX_LOG = 500;
 
+/** Strip ANSI colour/escape codes (Playwright error messages contain them). */
+const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, "");
+
 /** Schemes we refuse to navigate to by default (local-file / privileged). */
 const BLOCKED_SCHEMES = new Set([
   "file:",
@@ -253,6 +256,9 @@ export class AIPage {
   // Speed: remember the last snapshot + DOM version to serve cache hits and diffs.
   private lastSnapshot: Snapshot | null = null;
   private lastDomVersion = -1;
+  // Count real navigations, so an action that navigates is reliably "page changed"
+  // even if the fingerprint is captured mid-transition.
+  private navCount = 0;
 
   // The navigation's own document response — held aside so the per-page log
   // wipe below doesn't erase the very request that produced the current page.
@@ -287,6 +293,13 @@ export class AIPage {
       if (this.pendingDocResponse) {
         this.networkLog.push(this.pendingDocResponse);
         this.pendingDocResponse = null;
+      }
+      // Track EVERY navigation (Enter submits, form posts, link clicks), not just
+      // goto() — so the trace reflects real page changes and change-detection is reliable.
+      const url = this.page.url();
+      if (url && url !== "about:blank") {
+        this.navCount++;
+        this.record("navigate", url);
       }
     });
   }
@@ -477,7 +490,9 @@ export class AIPage {
 
   /** Full visible text of the page. */
   async readText(): Promise<string> {
-    return this.withContextRetry(() => this.page.evaluate(() => document.body.innerText));
+    const text = await this.withContextRetry(() => this.page.evaluate(() => document.body.innerText));
+    this.record("action", `read page text (${text.length} chars)`);
+    return text;
   }
 
   /**
@@ -487,12 +502,14 @@ export class AIPage {
    */
   async find(query: string, limit = 5): Promise<SnapshotElement[]> {
     const snap = await this.snapshot({ cache: true });
-    return snap.elements
+    const results = snap.elements
       .map((e) => ({ e, score: elementMatchScore(e, query) }))
       .filter((x) => x.score > 0)
       .sort((a, b) => b.score - a.score)
       .slice(0, limit)
       .map((x) => x.e);
+    this.record("action", `find "${query}" (${results.length} match${results.length === 1 ? "" : "es"})`);
+    return results;
   }
 
   // ---- CHECK --------------------------------------------------------------
@@ -539,12 +556,12 @@ export class AIPage {
       );
     }
     await this.page.goto(url, { timeout: opts.timeoutMs, waitUntil: opts.waitUntil });
-    this.record("navigate", url);
+    // navigation is recorded by the framenavigated listener
   }
 
   async back(): Promise<void> {
     await this.page.goBack();
-    this.record("back", this.page.url());
+    // navigation is recorded by the framenavigated listener
   }
 
   async forward(): Promise<void> {
@@ -599,28 +616,33 @@ export class AIPage {
 
   async hoverById(id: string): Promise<void> {
     await this.page.hover(this.sel(id));
+    this.record("action", `hover ${id}`);
   }
 
   async scrollBy(dy: number): Promise<void> {
     await this.page.mouse.wheel(0, dy);
+    this.record("action", `scroll ${dy >= 0 ? "down" : "up"}`);
   }
 
   async press(key: string): Promise<void> {
     await this.page.keyboard.press(key);
+    this.record("action", `press ${key}`);
   }
 
   // ---- MANIPULATE ---------------------------------------------------------
 
   /** Run arbitrary JS in the page. */
   async evaluate<T>(fn: string): Promise<T> {
-    return this.page.evaluate(fn) as Promise<T>;
+    const result = (await this.page.evaluate(fn)) as T;
+    this.record("action", "evaluate JS");
+    return result;
   }
 
   // ---- EXTRACT ------------------------------------------------------------
 
   /** Deterministic extraction of all links (LLM-schema extraction comes later). */
   async extractLinks(): Promise<Link[]> {
-    return this.withContextRetry(() =>
+    const links = await this.withContextRetry(() =>
       this.page.evaluate(() =>
         Array.from(document.querySelectorAll("a[href]")).map((a) => ({
           name: (a as HTMLElement).innerText.trim().slice(0, 120),
@@ -628,6 +650,8 @@ export class AIPage {
         })),
       ),
     );
+    this.record("action", `extract links (${links.length} found)`);
+    return links;
   }
 
   // ---- CORRECT (reliability layer) ----------------------------------------
@@ -646,6 +670,7 @@ export class AIPage {
     const retries = opts.retries ?? 2;
     const backoffMs = opts.backoffMs ?? 300;
     const before = await this.fingerprint();
+    const navBefore = this.navCount;
 
     let lastError: unknown;
     for (let attempt = 1; attempt <= retries + 1; attempt++) {
@@ -654,6 +679,7 @@ export class AIPage {
         await this.waitUntilReady(opts.settleTimeoutMs ?? 8000);
         const after = await this.fingerprint();
         const changed =
+          this.navCount > navBefore ||
           before.url !== after.url ||
           before.title !== after.title ||
           before.elementCount !== after.elementCount;
@@ -667,7 +693,7 @@ export class AIPage {
     }
 
     const after = await this.fingerprint().catch(() => before);
-    const message = lastError instanceof Error ? lastError.message : String(lastError);
+    const message = stripAnsi(lastError instanceof Error ? lastError.message : String(lastError));
     const hint = /selector|timeout/i.test(message)
       ? " The element may no longer exist — take a fresh snapshot and retry."
       : "";

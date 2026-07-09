@@ -63,8 +63,8 @@ const PAGE_HTML = `<!doctype html>
       }
     } catch { setStatus(false); }
   }
-  setInterval(tickFrame, 500);
-  setInterval(tickEvents, 800);
+  setInterval(tickFrame, 300);
+  setInterval(tickEvents, 500);
   tickFrame(); tickEvents();
 </script>
 </body></html>`;

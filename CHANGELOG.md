@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.2 — 2026-07-09
+
+Trace and reporting fixes surfaced while producing a supervised-session recording.
+
+- **Fixed: the live-view trace missed navigations.** Only `goto()` was logged, so a navigation from an Enter-submit, form post, or link click left the page changing with nothing in the trace. Every main-frame navigation is now recorded — the supervisor view tracks the full session.
+- **Fixed: actions that navigate reported "no visible page change."** Change detection now counts real navigations, so a click or submit that loads a new page is reliably reported as "page changed" even when the fingerprint is captured mid-transition.
+- **Improved: richer action trace.** `read`, `find`, `extract`, `hover`, `scroll`, `press`, and `evaluate` are now recorded, so the trace reflects the AI's full activity, not just clicks/types/navigations.
+- **Fixed: ANSI escape codes leaked into error details.** Playwright error messages (which embed terminal colour codes) are stripped before appearing in an `ActionResult` or the trace.
+- **Improved: live view refreshes faster** (frames 300 ms, trace 500 ms) for a more real-time supervisor view.
+
 ## 0.1.1 — 2026-07-08
 
 Fixes from the first round of real-site field testing (example.com, Hacker News, Wikipedia, httpbin forms).

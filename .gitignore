@@ -10,6 +10,15 @@ dist/
 
 # Unrelated file (not part of this project)
 PrivaSearch.html
+Capture d*.png
+
+# Video-production scratch (demo assets, not part of the framework)
+recordings/
+remotion-video/
+record.ts
+record-dual.ts
+make-header.ts
+capture-shots.ts
 
 # Logs / OS cruft
 *.log
