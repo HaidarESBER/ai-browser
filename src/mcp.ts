@@ -11,8 +11,64 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { readFileSync } from "node:fs";
 import { AIBrowser, AIPage, type Snapshot, type SnapshotDiff } from "./browser.js";
 import { LiveView } from "./live.js";
+
+function readVersion(): string {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+    return (pkg.version as string) ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+function printHelp(): void {
+  console.log(`ecobrowser-mcp v${readVersion()} — an AI-native browser, as an MCP server
+
+Exposes a real browser to any MCP client (Claude Desktop, Claude Code, Cursor, or
+your own agent): structured perception, verified self-healing actions, incremental
+diff perception, and a live view — no code required.
+
+USAGE
+  ecobrowser-mcp             Start the MCP server on stdio (what MCP clients spawn)
+  ecobrowser-mcp --help      Show this help
+  ecobrowser-mcp --version   Print the version
+
+MCP CLIENT SETUP  (Claude Desktop — claude_desktop_config.json)
+  {
+    "mcpServers": {
+      "ecobrowser": { "command": "npx", "args": ["ecobrowser-mcp"] }
+    }
+  }
+  Claude Code:  claude mcp add ecobrowser -- npx ecobrowser-mcp
+
+TOOLS
+  browser_navigate   browser_snapshot   browser_changes    browser_find
+  browser_read_text  browser_back       browser_click      browser_type
+  browser_console    browser_network    browser_evaluate   browser_extract_links
+  browser_reset
+
+ENVIRONMENT
+  AI_BROWSER_HEADED=1        Show the browser window (default: headless)
+  AI_BROWSER_LIVE=0         Disable the live-view server
+  AI_BROWSER_LIVE_PORT=N    Preferred live-view port (default 7333)
+  AI_BROWSER_ALLOW_LOCAL=1  Allow file:// / privileged-scheme navigation
+
+DOCS  https://github.com/HaidarESBER/ai-browser`);
+}
+
+// CLI flags — handled before the stdio transport takes over the streams.
+const cliArgs = process.argv.slice(2);
+if (cliArgs.includes("--help") || cliArgs.includes("-h")) {
+  printHelp();
+  process.exit(0);
+}
+if (cliArgs.includes("--version") || cliArgs.includes("-v") || cliArgs.includes("-V")) {
+  console.log(readVersion());
+  process.exit(0);
+}
 
 let browser: AIBrowser | null = null;
 let page: AIPage | null = null;

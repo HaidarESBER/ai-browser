@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.4 — 2026-07-09
+
+- **Added: `ecobrowser-mcp --help` and `--version`.** The MCP bin now prints setup, the tool list, and env vars (`--help`) or the version (`--version`) instead of only starting the stdio server.
+- **Added: a post-install getting-started note.** After `npm install`, a short banner points to `npx ecobrowser-mcp --help` and the library import (skipped cleanly under `--ignore-scripts`).
+
 ## 0.1.3 — 2026-07-09
 
 - **Added: Chromium installs automatically.** A `postinstall` hook runs `playwright install chromium`, so `npm install ecobrowser` fetches the browser with no manual step. (Installs with `--ignore-scripts` still need `npx playwright install chromium`.)
