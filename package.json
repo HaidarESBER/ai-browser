@@ -1,6 +1,6 @@
 {
   "name": "ecobrowser",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "type": "module",
   "description": "AI-native browser framework — the AI's hands and eyes on the web. Structured (no-pixel) perception, verified self-healing actions, incremental diff perception, a live view — as a TypeScript library and an MCP server.",
   "keywords": [
@@ -42,6 +42,7 @@
     "SPEC.md"
   ],
   "scripts": {
+    "postinstall": "playwright install chromium",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "tsx src/test.ts",

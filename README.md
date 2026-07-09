@@ -151,8 +151,10 @@ It's **an MCP server** because it registers schema-typed tools and answers `init
 
 ```bash
 npm install ecobrowser
-npx playwright install chromium   # one-time browser download
 ```
+
+Chromium is downloaded automatically on install (a `postinstall` hook). If you
+install with `--ignore-scripts`, fetch it manually: `npx playwright install chromium`.
 
 ### Option A — as an MCP server (drive it from an AI)
 
