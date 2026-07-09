@@ -15,6 +15,16 @@ import { readFileSync } from "node:fs";
 import { AIBrowser, AIPage, type Snapshot, type SnapshotDiff } from "./browser.js";
 import { LiveView } from "./live.js";
 
+// Colour helpers — on for a terminal, off when piped or NO_COLOR is set.
+const useColor = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
+const paint = (code: string, s: string): string => (useColor ? `\x1b[${code}m${s}\x1b[0m` : s);
+const bold = (s: string) => paint("1", s);
+const dim = (s: string) => paint("2", s);
+const cyan = (s: string) => paint("36", s);
+const green = (s: string) => paint("32", s);
+const yellow = (s: string) => paint("33", s);
+const magenta = (s: string) => paint("35", s);
+
 function readVersion(): string {
   try {
     const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -25,38 +35,39 @@ function readVersion(): string {
 }
 
 function printHelp(): void {
-  console.log(`ecobrowser-mcp v${readVersion()} — an AI-native browser, as an MCP server
-
-Exposes a real browser to any MCP client (Claude Desktop, Claude Code, Cursor, or
-your own agent): structured perception, verified self-healing actions, incremental
-diff perception, and a live view — no code required.
-
-USAGE
-  ecobrowser-mcp             Start the MCP server on stdio (what MCP clients spawn)
-  ecobrowser-mcp --help      Show this help
-  ecobrowser-mcp --version   Print the version
-
-MCP CLIENT SETUP  (Claude Desktop — claude_desktop_config.json)
-  {
-    "mcpServers": {
-      "ecobrowser": { "command": "npx", "args": ["ecobrowser-mcp"] }
-    }
-  }
-  Claude Code:  claude mcp add ecobrowser -- npx ecobrowser-mcp
-
-TOOLS
-  browser_navigate   browser_snapshot   browser_changes    browser_find
-  browser_read_text  browser_back       browser_click      browser_type
-  browser_console    browser_network    browser_evaluate   browser_extract_links
-  browser_reset
-
-ENVIRONMENT
-  AI_BROWSER_HEADED=1        Show the browser window (default: headless)
-  AI_BROWSER_LIVE=0         Disable the live-view server
-  AI_BROWSER_LIVE_PORT=N    Preferred live-view port (default 7333)
-  AI_BROWSER_ALLOW_LOCAL=1  Allow file:// / privileged-scheme navigation
-
-DOCS  https://github.com/HaidarESBER/ai-browser`);
+  const head = (t: string) => bold(cyan(t));
+  const row = (a: string, b: string) => `    ${green(a.padEnd(28))}${dim(b)}`;
+  console.log(
+    [
+      "",
+      `  ${bold(magenta("ecobrowser-mcp"))}  ${dim("v" + readVersion())}`,
+      `  ${dim("An AI-native browser as an MCP server — structured perception, verified")}`,
+      `  ${dim("self-healing actions, incremental diff perception, and a live view.")}`,
+      "",
+      `  ${head("USAGE")}`,
+      row("ecobrowser-mcp", "start the MCP server on stdio"),
+      row("ecobrowser-mcp --help", "show this help"),
+      row("ecobrowser-mcp --version", "print the version"),
+      "",
+      `  ${head("QUICK SETUP")}`,
+      `    ${yellow("Claude Desktop")}  ${dim("→ claude_desktop_config.json:")}`,
+      `      ${dim('"ecobrowser": { "command": "npx", "args": ["ecobrowser-mcp"] }')}`,
+      `    ${yellow("Claude Code")}     ${green("claude mcp add ecobrowser -- npx ecobrowser-mcp")}`,
+      "",
+      `  ${head("TOOLS")} ${dim("(13, all prefixed browser_)")}`,
+      `    ${dim("navigate  snapshot  changes  find  read_text  back  click")}`,
+      `    ${dim("type  console  network  evaluate  extract_links  reset")}`,
+      "",
+      `  ${head("ENVIRONMENT")}`,
+      row("AI_BROWSER_HEADED=1", "show the browser window (default: headless)"),
+      row("AI_BROWSER_LIVE=0", "disable the live-view server"),
+      row("AI_BROWSER_LIVE_PORT=N", "preferred live-view port (default 7333)"),
+      row("AI_BROWSER_ALLOW_LOCAL=1", "allow file:// / privileged navigation"),
+      "",
+      `  ${head("DOCS")}   ${cyan("https://github.com/HaidarESBER/ai-browser")}`,
+      "",
+    ].join("\n"),
+  );
 }
 
 // CLI flags — handled before the stdio transport takes over the streams.
@@ -68,6 +79,16 @@ if (cliArgs.includes("--help") || cliArgs.includes("-h")) {
 if (cliArgs.includes("--version") || cliArgs.includes("-v") || cliArgs.includes("-V")) {
   console.log(readVersion());
   process.exit(0);
+}
+
+// A human ran it directly in a terminal (MCP clients pipe stdin, so isTTY is false):
+// nudge them toward --help instead of leaving a silent server that looks hung.
+if (process.stdin.isTTY) {
+  console.error(
+    `${bold(magenta("ecobrowser-mcp"))} ${dim("v" + readVersion())} ${dim("— MCP server (stdio).")}\n` +
+      `${dim("Launch it from an MCP client; run")} ${green("ecobrowser-mcp --help")} ${dim("for setup.")}\n` +
+      `${dim("Waiting for MCP messages on stdin…  (Ctrl+C to quit)")}`,
+  );
 }
 
 let browser: AIBrowser | null = null;
