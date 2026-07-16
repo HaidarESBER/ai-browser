@@ -342,3 +342,12 @@ See [`SPEC.md`](./SPEC.md) for the full specification and north star.
 <div align="center">
 <sub>Built as an AI-first browser layer — the AI's hands and eyes on the web.</sub>
 </div>
+
+
+---
+
+## 👤 Author
+
+**Built by [Haidar Esber](https://haidaresber.github.io)** — Lebanese software & web developer based in France.
+
+[Portfolio](https://haidaresber.github.io) · [GitHub](https://github.com/HaidarESBER) · [LinkedIn](https://www.linkedin.com/in/haidaresber)
