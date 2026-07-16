@@ -70,6 +70,30 @@ function printHelp(): void {
   );
 }
 
+/** A boxed welcome shown when a human runs the bin directly in a terminal. */
+function printWelcome(): void {
+  const visLen = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "").length;
+  const W = 50; // inner content width
+  const line = (content: string) =>
+    `  ${dim("│")}  ${content}${" ".repeat(Math.max(0, W - visLen(content)))}  ${dim("│")}`;
+  const bar = (l: string, r: string) => `  ${dim(l + "─".repeat(W + 4) + r)}`;
+  const item = (name: string, value: string) => `${yellow(name.padEnd(15))} ${value}`;
+  console.error(
+    [
+      "",
+      bar("┌", "┐"),
+      line(`${bold(magenta("ecobrowser"))}  ${dim("v" + readVersion())}`),
+      line(dim("An AI-native browser · MCP server")),
+      line(""),
+      line(item("Setup & tools", green("ecobrowser-mcp --help"))),
+      line(item("Docs", cyan("github.com/HaidarESBER/ai-browser"))),
+      bar("└", "┘"),
+      `  ${dim("Waiting for MCP messages on stdin…  (Ctrl+C to quit)")}`,
+      "",
+    ].join("\n"),
+  );
+}
+
 // CLI flags — handled before the stdio transport takes over the streams.
 const cliArgs = process.argv.slice(2);
 if (cliArgs.includes("--help") || cliArgs.includes("-h")) {
@@ -82,13 +106,9 @@ if (cliArgs.includes("--version") || cliArgs.includes("-v") || cliArgs.includes(
 }
 
 // A human ran it directly in a terminal (MCP clients pipe stdin, so isTTY is false):
-// nudge them toward --help instead of leaving a silent server that looks hung.
+// show a welcome banner instead of a silent server that looks hung.
 if (process.stdin.isTTY) {
-  console.error(
-    `${bold(magenta("ecobrowser-mcp"))} ${dim("v" + readVersion())} ${dim("— MCP server (stdio).")}\n` +
-      `${dim("Launch it from an MCP client; run")} ${green("ecobrowser-mcp --help")} ${dim("for setup.")}\n` +
-      `${dim("Waiting for MCP messages on stdin…  (Ctrl+C to quit)")}`,
-  );
+  printWelcome();
 }
 
 let browser: AIBrowser | null = null;
