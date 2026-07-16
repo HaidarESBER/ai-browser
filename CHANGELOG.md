@@ -3,7 +3,7 @@
 ## 0.1.5 — 2026-07-09
 
 - **Improved: `ecobrowser-mcp --help` is colourised and cleanly laid out** (aligned columns, sectioned; respects `NO_COLOR` and plain-pipes when not a TTY).
-- **Added: a startup hint when run interactively.** Running `ecobrowser-mcp` directly in a terminal now prints a one-line note pointing to `--help`, instead of looking like a hung process.
+- **Added: a welcome banner when run interactively.** Running `ecobrowser-mcp` directly in a terminal now prints a boxed welcome (setup + docs) instead of looking like a hung process. (This is the reliable "welcome" — npm makes an install-time one impossible.)
 - **Removed: the post-install banner.** npm hides dependency install-script output by default, so it almost never surfaced; the README (npm page) and `--help` are the real guides. Chromium still auto-installs via the postinstall hook.
 
 ## 0.1.4 — 2026-07-09
