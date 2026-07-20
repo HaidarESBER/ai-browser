@@ -268,6 +268,11 @@ export class AIPage {
   // Count real navigations, so an action that navigates is reliably "page changed"
   // even if the fingerprint is captured mid-transition.
   private navCount = 0;
+  // Next element id to hand out — owned here, not by the document, so ids are
+  // unique for the life of this AIPage across every page it visits.
+  private nextId = 0;
+  // Identity of the document the last snapshot was taken from.
+  private lastDocId: string | null = null;
 
   // The navigation's own document response — held aside so the per-page log
   // wipe below doesn't erase the very request that produced the current page.
@@ -380,15 +385,19 @@ export class AIPage {
   }
 
   private async buildSnapshot(): Promise<Snapshot> {
-    const elements = await this.withContextRetry(() => this.page.evaluate(() => {
+    const out = await this.withContextRetry(() => this.page.evaluate((firstId) => {
       const SELECTOR =
         'a, button, input, textarea, select, [role="button"], [role="link"], [onclick]';
       const results: SnapshotElement[] = [];
-      // Durable ids: a persistent per-page counter, and we REUSE any id already
-      // stamped on an element — so a surviving element keeps the same id across
-      // snapshots, and the AI can reference something it saw several steps ago.
-      const w = window as unknown as { __aiIdCounter?: number };
-      if (w.__aiIdCounter === undefined) w.__aiIdCounter = 0;
+      // Durable ids: we REUSE any id already stamped on an element — so a surviving
+      // element keeps the same id across snapshots. New ids come from a counter
+      // owned by the AIPage (not the document), so an id is never handed out twice,
+      // even after a navigation: a stale id from a previous page can't silently
+      // land on a different element of the new one.
+      let nextId = firstId;
+      const seen = new Set<string>();
+      const w = window as unknown as { __aiDocId?: string };
+      if (w.__aiDocId === undefined) w.__aiDocId = Math.random().toString(36).slice(2);
 
       for (const el of Array.from(document.querySelectorAll(SELECTOR))) {
         const rect = el.getBoundingClientRect();
@@ -402,11 +411,14 @@ export class AIPage {
           continue;
         }
 
+        // A node cloned by the page (innerHTML copy, template) carries its
+        // original's id — re-stamp duplicates so every id targets one element.
         let id = el.getAttribute("data-ai-id");
-        if (!id) {
-          id = `e${w.__aiIdCounter++}`;
+        if (!id || seen.has(id)) {
+          id = `e${nextId++}`;
           el.setAttribute("data-ai-id", id);
         }
+        seen.add(id);
 
         // .labels covers both <label for=…> and label-wrapped inputs, which
         // otherwise have no accessible name at all (common on plain HTML forms).
@@ -462,10 +474,12 @@ export class AIPage {
 
         results.push(entry);
       }
-      return results;
-    }));
+      return { elements: results, nextId, docId: w.__aiDocId };
+    }, this.nextId));
 
-    return { url: this.page.url(), title: await this.page.title(), elements };
+    this.nextId = Math.max(this.nextId, out.nextId);
+    this.lastDocId = out.docId;
+    return { url: this.page.url(), title: await this.page.title(), elements: out.elements };
   }
 
   /**
