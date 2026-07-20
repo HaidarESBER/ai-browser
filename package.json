@@ -46,6 +46,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "tsx src/test.ts",
+    "regress": "tsx src/regress.ts",
     "demo": "tsx src/demo.ts",
     "mcp": "tsx src/mcp.ts",
     "smoke": "tsx src/mcp-smoke.ts",
