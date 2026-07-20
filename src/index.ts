@@ -11,6 +11,7 @@ export {
   computeSnapshotDiff,
   elementMatchScore,
   isBlockedNavigation,
+  sameCharacters,
   type ActionResult,
   type ConsoleEntry,
   type GotoOptions,

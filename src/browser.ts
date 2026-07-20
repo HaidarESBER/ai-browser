@@ -135,6 +135,15 @@ export function isBlockedNavigation(url: string, allowLocal = false): boolean {
 }
 
 /**
+ * True if two field values hold the same letters and digits in the same order —
+ * i.e. the field only re-formatted what was typed ("0612345678" → "06 12 34 56 78").
+ */
+export function sameCharacters(a: string, b: string): boolean {
+  const core = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+  return core(a) !== "" && core(a) === core(b);
+}
+
+/**
  * Diff two snapshots. Elements are keyed by semantic signature (tag|role|name)
  * plus an occurrence index, so repeated identical elements (e.g. five identical
  * buttons) are matched positionally instead of collapsing to one key.
@@ -597,12 +606,25 @@ export class AIPage {
     });
   }
 
-  /** Type into a field by id, then verify the typed value actually landed. */
+  /**
+   * Type into a field by id, then verify the typed value actually landed. A field
+   * that reformats input (phone / card / currency masks) still counts as success
+   * when the same letters and digits landed; the result says what it now holds.
+   */
   async typeById(id: string, text: string): Promise<ActionResult> {
-    return this.reliableOnElement(id, "type into", async (sel) => {
+    let reformatted: string | null = null;
+    const result = await this.reliableOnElement(id, "type into", async (sel) => {
+      reformatted = null;
       await this.page.waitForSelector(sel, { state: "visible", timeout: 5000 });
       await this.page.fill(sel, text);
       const actual = await this.page.inputValue(sel);
+      if (actual !== text && sameCharacters(actual, text)) {
+        const secret = await this.page
+          .$eval(sel, (el) => el.matches("input[type=password]"))
+          .catch(() => true);
+        if (!secret) reformatted = actual;
+        return;
+      }
       if (actual !== text) {
         const secret = await this.page
           .$eval(sel, (el) => el.matches("input[type=password]"))
@@ -614,6 +636,10 @@ export class AIPage {
         );
       }
     });
+    if (result.ok && reformatted !== null) {
+      result.detail += ` The field reformatted the input to "${reformatted}".`;
+    }
+    return result;
   }
 
   /** Select an option by id, with reliability + self-healing. */
