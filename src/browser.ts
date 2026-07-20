@@ -420,7 +420,10 @@ export class AIPage {
           tag: el.tagName.toLowerCase(),
         };
         const value = (el as HTMLInputElement).value;
-        if (value) entry.value = value.slice(0, 120);
+        // Never put a secret into the model's context (or the diff / trace):
+        // a password field only reports THAT it holds something.
+        const secret = el.matches("input[type=password]");
+        if (value) entry.value = secret ? "[redacted]" : value.slice(0, 120);
 
         // State flags the AI needs to act correctly (don't click a disabled button, etc.).
         const inp = el as unknown as {
@@ -601,7 +604,14 @@ export class AIPage {
       await this.page.fill(sel, text);
       const actual = await this.page.inputValue(sel);
       if (actual !== text) {
-        throw new Error(`field holds "${actual}" after typing, expected "${text}"`);
+        const secret = await this.page
+          .$eval(sel, (el) => el.matches("input[type=password]"))
+          .catch(() => true);
+        throw new Error(
+          secret
+            ? "password field value did not match after typing (value redacted)"
+            : `field holds "${actual}" after typing, expected "${text}"`,
+        );
       }
     });
   }
