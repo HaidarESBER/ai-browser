@@ -35,5 +35,17 @@ await check("password values never reach the snapshot", async (p) => {
   assert.ok(!JSON.stringify(p.events()).includes("hunter2"));
 });
 
+console.log("\ntyping:");
+
+await check("a field that reformats input still counts as typed", async (p) => {
+  const mask = `this.value=this.value.replace(/\\D/g,'').replace(/(\\d{2})(?=\\d)/g,'$1 ')`;
+  await p.goto(html(`<input aria-label="Phone" oninput="${mask}">`));
+  const s = await p.snapshot();
+  const r = await p.typeById(s.elements[0]!.id, "0612345678");
+  assert.equal(r.ok, true, r.detail);
+  assert.equal(r.attempts, 1);
+  assert.match(r.detail, /reformatted the input to "06 12 34 56 78"/);
+});
+
 await browser.close();
 console.log(`\n✅ ${passed} regression tests passed.`);

@@ -7,6 +7,7 @@ import {
   computeSnapshotDiff,
   elementMatchScore,
   isBlockedNavigation,
+  sameCharacters,
   type Snapshot,
   type SnapshotElement,
 } from "./browser.js";
@@ -112,5 +113,12 @@ check("detects a checkbox toggling to checked", () => {
   assert.equal(d.changed.length, 1);
   assert.equal(d.unchanged, 0);
 });
+
+console.log("\nsameCharacters (input masks):");
+
+check("a reformatted phone number counts as the same input", () =>
+  assert.equal(sameCharacters("06 12 34 56 78", "0612345678"), true));
+check("a truncated value does not", () => assert.equal(sameCharacters("06123", "0612345678"), false));
+check("an empty field never matches", () => assert.equal(sameCharacters("", "--"), false));
 
 console.log(`\n✅ ${passed} tests passed.`);
