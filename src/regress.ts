@@ -47,5 +47,37 @@ await check("a field that reformats input still counts as typed", async (p) => {
   assert.match(r.detail, /reformatted the input to "06 12 34 56 78"/);
 });
 
+console.log("\nelement ids:");
+
+await check("ids are never reused after a navigation", async (p) => {
+  await p.goto(html(`<button>Delete account</button><button>Cancel</button>`));
+  const a = await p.snapshot();
+  await p.goto(html(`<button>Buy now</button><button>Cancel</button>`));
+  const b = await p.snapshot();
+  const aIds = new Set(a.elements.map((e) => e.id));
+  assert.ok(b.elements.every((e) => !aIds.has(e.id)), JSON.stringify([a, b]));
+});
+
+await check("a stale id from the previous page does not click the new page", async (p) => {
+  await p.goto(html(`<button>Delete account</button>`));
+  const stale = (await p.snapshot()).elements[0]!.id;
+  await p.goto(html(`<button onclick="window.bought=1">Buy now</button>`));
+  await p.snapshot();
+  const r = await p.clickById(stale);
+  assert.equal(r.ok, false);
+  assert.equal(await p.page.evaluate(() => (window as { bought?: number }).bought), undefined);
+});
+
+await check("cloned nodes get their own ids", async (p) => {
+  await p.goto(html(`<div id=l><button>Delete</button></div>`));
+  await p.snapshot();
+  await p.page.evaluate(() => {
+    const l = document.getElementById("l")!;
+    l.innerHTML += l.innerHTML; // copies data-ai-id along with the markup
+  });
+  const ids = (await p.snapshot()).elements.map((e) => e.id);
+  assert.equal(new Set(ids).size, 2, ids.join(","));
+});
+
 await browser.close();
 console.log(`\n✅ ${passed} regression tests passed.`);
