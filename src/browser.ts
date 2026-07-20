@@ -775,19 +775,25 @@ export class AIPage {
   /**
    * Self-heal: if the original id has vanished from the page, find a replacement
    * element with the same identity (tag/role/name) and return its new id. Returns
-   * null if the id still exists (a real failure, not a moved id) or nothing matches.
+   * null — refusing to guess — if the id still exists (a real failure, not a moved
+   * id), the page is now a different document, or the identity is ambiguous (two
+   * "Delete" buttons before or after): acting on the wrong one is worse than failing.
    */
   private async healId(id: string): Promise<string | null> {
-    const prev = this.lastSnapshot?.elements.find((e) => e.id === id);
-    if (!prev) return null;
+    const prevSnap = this.lastSnapshot;
+    const prevDoc = this.lastDocId;
+    const prev = prevSnap?.elements.find((e) => e.id === id);
+    if (!prevSnap || !prev) return null;
     const fresh = await this.buildSnapshot();
     this.lastSnapshot = fresh;
     this.lastDomVersion = await this.domVersion();
     if (fresh.elements.some((e) => e.id === id)) return null; // still there → not a moved id
-    const match = fresh.elements.find(
-      (e) => e.tag === prev.tag && e.role === prev.role && e.name === prev.name,
-    );
-    return match ? match.id : null;
+    if (this.lastDocId !== prevDoc) return null; // navigated: nothing to re-locate
+    const same = (e: SnapshotElement) =>
+      e.tag === prev.tag && e.role === prev.role && e.name === prev.name;
+    if (prevSnap.elements.filter(same).length !== 1) return null;
+    const matches = fresh.elements.filter(same);
+    return matches.length === 1 ? matches[0]!.id : null;
   }
 
   /** A cheap page fingerprint for change detection (url + title + interactive count). */
