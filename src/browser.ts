@@ -81,6 +81,8 @@ export interface ActionResult {
   attempts: number;
   detail: string;
   error?: string;
+  /** The action failed after it may already have taken effect, so it was not retried. */
+  maybeApplied?: boolean;
   before?: PageFingerprint;
   after?: PageFingerprint;
 }
@@ -98,6 +100,13 @@ export interface PageEvent {
   ts: number;
   kind: string;
   detail: string;
+}
+
+/** An action failed after it may already have been dispatched — retrying could repeat it. */
+class MaybeAppliedError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+  }
 }
 
 const sleep = (ms: number): Promise<void> =>
@@ -616,7 +625,14 @@ export class AIPage {
       // Short existence check (fast failure if the id is gone), then a more
       // generous actionability window (slow-rendering / throttled pages).
       await this.page.waitForSelector(sel, { state: "visible", timeout: 5000 });
-      await this.page.click(sel, { timeout: 10000 });
+      // Wait for actionability WITHOUT clicking — failures up to here are safe to retry.
+      await this.page.click(sel, { timeout: 10000, trial: true });
+      try {
+        await this.page.click(sel, { timeout: 5000 });
+      } catch (err) {
+        // The click may have been dispatched (submit, purchase…): never repeat it.
+        throw new MaybeAppliedError(err);
+      }
     });
   }
 
@@ -664,19 +680,24 @@ export class AIPage {
     });
   }
 
-  async hoverById(id: string): Promise<void> {
-    await this.page.hover(this.sel(id));
-    this.record("action", `hover ${id}`);
+  /** Hover an element by id, with reliability + self-healing (hovering twice is harmless). */
+  async hoverById(id: string): Promise<ActionResult> {
+    return this.reliableOnElement(id, "hover", async (sel) => {
+      await this.page.waitForSelector(sel, { state: "visible", timeout: 5000 });
+      await this.page.hover(sel, { timeout: 10000 });
+    });
   }
 
-  async scrollBy(dy: number): Promise<void> {
-    await this.page.mouse.wheel(0, dy);
-    this.record("action", `scroll ${dy >= 0 ? "down" : "up"}`);
+  /** Scroll the page; reports whether anything new appeared. Not retried. */
+  async scrollBy(dy: number): Promise<ActionResult> {
+    return this.reliable(`scroll ${dy >= 0 ? "down" : "up"}`, () => this.page.mouse.wheel(0, dy), {
+      retries: 0,
+    });
   }
 
-  async press(key: string): Promise<void> {
-    await this.page.keyboard.press(key);
-    this.record("action", `press ${key}`);
+  /** Press a key (e.g. "Enter", "Escape", "Control+A"). Not retried — Enter twice submits twice. */
+  async press(key: string): Promise<ActionResult> {
+    return this.reliable(`press ${key}`, () => this.page.keyboard.press(key), { retries: 0 });
   }
 
   // ---- MANIPULATE ---------------------------------------------------------
@@ -723,7 +744,9 @@ export class AIPage {
     const navBefore = this.navCount;
 
     let lastError: unknown;
+    let attempts = 0;
     for (let attempt = 1; attempt <= retries + 1; attempt++) {
+      attempts = attempt;
       try {
         await fn();
         await this.waitUntilReady(opts.settleTimeoutMs ?? 8000);
@@ -738,18 +761,32 @@ export class AIPage {
         return { ok: true, action, changed, attempts: attempt, before, after, detail };
       } catch (err) {
         lastError = err;
+        if (err instanceof MaybeAppliedError) break;
         if (attempt <= retries) await sleep(backoffMs * attempt);
       }
     }
 
     const after = await this.fingerprint().catch(() => before);
     const message = stripAnsi(lastError instanceof Error ? lastError.message : String(lastError));
-    const hint = /selector|timeout/i.test(message)
-      ? " The element may no longer exist — take a fresh snapshot and retry."
-      : "";
-    const detail = `${action} failed after ${retries + 1} attempt(s): ${message}.${hint}`;
+    const maybeApplied = lastError instanceof MaybeAppliedError;
+    const hint = maybeApplied
+      ? " It may already have taken effect — check the page before trying again."
+      : /selector|timeout/i.test(message)
+        ? " The element may no longer exist — take a fresh snapshot and retry."
+        : "";
+    const detail = `${action} failed after ${attempts} attempt(s): ${message}.${hint}`;
     this.record("error", detail);
-    return { ok: false, action, changed: false, attempts: retries + 1, before, after, error: message, detail };
+    return {
+      ok: false,
+      action,
+      changed: false,
+      attempts,
+      before,
+      after,
+      error: message,
+      detail,
+      ...(maybeApplied ? { maybeApplied } : {}),
+    };
   }
 
   /**
@@ -764,7 +801,7 @@ export class AIPage {
     act: (selector: string) => Promise<void>,
   ): Promise<ActionResult> {
     const first = await this.reliable(`${verb} ${id}`, () => act(this.sel(id)), { retries: 1 });
-    if (first.ok) return first;
+    if (first.ok || first.maybeApplied) return first;
 
     const newId = await this.healId(id);
     if (!newId) return first;
