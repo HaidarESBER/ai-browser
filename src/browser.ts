@@ -71,6 +71,8 @@ export interface PageFingerprint {
   url: string;
   title: string;
   elementCount: number;
+  /** Hash of the interactive elements' text, values and states (checked, expanded, …). */
+  stateHash: string;
 }
 
 /** Structured outcome of a reliable action — tells the AI exactly what happened. */
@@ -153,14 +155,27 @@ export function sameCharacters(a: string, b: string): boolean {
 }
 
 /**
- * Diff two snapshots. Elements are keyed by semantic signature (tag|role|name)
- * plus an occurrence index, so repeated identical elements (e.g. five identical
- * buttons) are matched positionally instead of collapsing to one key.
+ * Diff two snapshots. An element whose id is unique in both snapshots is the
+ * same element (ids are durable), so a relabelled button shows up as changed
+ * rather than removed + added. The rest are keyed by semantic signature
+ * (tag|role|name) plus an occurrence index, so repeated identical elements
+ * (e.g. five identical buttons) are matched positionally instead of collapsing
+ * to one key.
  */
 export function computeSnapshotDiff(prev: Snapshot, next: Snapshot): SnapshotDiff {
+  const uniqueIds = (s: Snapshot) => {
+    const count = new Map<string, number>();
+    for (const e of s.elements) count.set(e.id, (count.get(e.id) ?? 0) + 1);
+    return new Set([...count].filter(([, n]) => n === 1).map(([id]) => id));
+  };
+  const prevIds = uniqueIds(prev);
+  const nextIds = uniqueIds(next);
+  const stable = new Set([...prevIds].filter((id) => nextIds.has(id)));
+
   const makeKeyer = () => {
     const seen = new Map<string, number>();
     return (e: SnapshotElement) => {
+      if (stable.has(e.id)) return `id:${e.id}`;
       const base = `${e.tag}|${e.role}|${e.name}`;
       const n = seen.get(base) ?? 0;
       seen.set(base, n + 1);
@@ -179,8 +194,9 @@ export function computeSnapshotDiff(prev: Snapshot, next: Snapshot): SnapshotDif
   const added = nextEntries.filter(([k]) => !prevMap.has(k)).map(([, e]) => e);
   const removed = prevEntries.filter(([k]) => !nextKeys.has(k)).map(([, e]) => e);
 
-  const desc = (x: SnapshotElement) => {
+  const desc = (x: SnapshotElement, other: SnapshotElement) => {
     const parts: string[] = [];
+    if (x.name !== other.name) parts.push(`name="${x.name}"`);
     if (x.value !== undefined) parts.push(`value="${x.value}"`);
     if (x.state?.length) parts.push(`[${x.state.join(",")}]`);
     return parts.join(" ") || "∅";
@@ -191,9 +207,13 @@ export function computeSnapshotDiff(prev: Snapshot, next: Snapshot): SnapshotDif
   for (const [k, e] of nextEntries) {
     const p = prevMap.get(k);
     if (!p) continue;
-    // Changed if the value OR the state flags differ (e.g. a checkbox toggled).
-    if (p.value !== e.value || (p.state ?? []).join(",") !== (e.state ?? []).join(",")) {
-      changed.push({ id: e.id, name: e.name, from: desc(p), to: desc(e) });
+    // Changed if the label, value OR state flags differ (e.g. a checkbox toggled).
+    if (
+      p.name !== e.name ||
+      p.value !== e.value ||
+      (p.state ?? []).join(",") !== (e.state ?? []).join(",")
+    ) {
+      changed.push({ id: e.id, name: e.name, from: desc(p, e), to: desc(e, p) });
     } else {
       unchanged++;
     }
@@ -759,7 +779,8 @@ export class AIPage {
           this.navCount > navBefore ||
           before.url !== after.url ||
           before.title !== after.title ||
-          before.elementCount !== after.elementCount;
+          before.elementCount !== after.elementCount ||
+          before.stateHash !== after.stateHash;
         const detail = `${action} succeeded${changed ? " (page changed)" : " (no visible page change)"}.`;
         this.record("action", detail);
         return { ok: true, action, changed, attempts: attempt, before, after, detail };
@@ -837,20 +858,46 @@ export class AIPage {
     return matches.length === 1 ? matches[0]!.id : null;
   }
 
-  /** A cheap page fingerprint for change detection (url + title + interactive count). */
+  /**
+   * A cheap page fingerprint for change detection: url + title + interactive
+   * count, plus a hash of each interactive element's label, value and state — so
+   * a toggled checkbox, an opened menu or a relabelled button counts as a change
+   * even when no element was added or removed.
+   */
   private async fingerprint(): Promise<PageFingerprint> {
     try {
-      const elementCount = await this.page.evaluate(
-        () =>
-          document.querySelectorAll(
-            'a, button, input, textarea, select, [role="button"], [role="link"], [onclick]',
-          ).length,
-      );
-      return { url: this.page.url(), title: await this.page.title(), elementCount };
+      const { elementCount, stateHash } = await this.page.evaluate(() => {
+        const els = document.querySelectorAll(
+          'a, button, input, textarea, select, [role="button"], [role="link"], [onclick]',
+        );
+        // (No helper functions in here: bundlers wrap them in helpers that don't
+        // exist inside the page.)
+        const parts: string[] = [];
+        for (const el of Array.from(els)) {
+          const inp = el as HTMLInputElement;
+          parts.push(
+            el.tagName,
+            ((el as HTMLElement).innerText ?? "").slice(0, 80),
+            String(inp.value ?? ""),
+            inp.checked ? "1" : "0",
+            inp.disabled ? "1" : "0",
+            el.getAttribute("aria-expanded") ?? "",
+            el.getAttribute("aria-checked") ?? "",
+            el.getAttribute("aria-selected") ?? "",
+            el.getAttribute("aria-pressed") ?? "",
+          );
+        }
+        parts.push(String(document.querySelectorAll("dialog[open], [role=dialog], [aria-modal=true]").length));
+        const all = parts.join("|");
+        let h = 5381;
+        for (let i = 0; i < all.length; i++) h = ((h * 33) ^ all.charCodeAt(i)) >>> 0;
+        return { elementCount: els.length, stateHash: h.toString(36) };
+      });
+      return { url: this.page.url(), title: await this.page.title(), elementCount, stateHash };
     } catch {
       // Page may be mid-navigation (execution context destroyed) — best effort,
       // so an in-flight nav doesn't turn a successful action into a spurious retry.
-      return { url: this.page.url(), title: "", elementCount: -1 };
+      return { url: this.page.url(), title: "", elementCount: -1, stateHash: "" };
     }
   }
 
