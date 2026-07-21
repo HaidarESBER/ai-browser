@@ -22,6 +22,18 @@ async function check(name: string, fn: (p: AIPage) => Promise<void>) {
 
 const html = (body: string) => `data:text/html,${encodeURIComponent(body)}`;
 
+/** Serve fixture pages from a fake http origin (pages can't link to data: URLs). */
+async function site(p: AIPage, pages: Record<string, string>): Promise<string> {
+  await p.page.route("http://fixture.test/**", (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const body = pages[path];
+    return body === undefined
+      ? route.fulfill({ status: 404, body: "not found" })
+      : route.fulfill({ contentType: "text/html", body });
+  });
+  return "http://fixture.test";
+}
+
 console.log("secrets:");
 
 await check("password values never reach the snapshot", async (p) => {
@@ -138,6 +150,30 @@ await check("press / hover / scroll report an ActionResult", async (p) => {
   assert.equal(hv.ok, true, hv.detail);
   const sc = await p.scrollBy(200);
   assert.equal(sc.ok, true, sc.detail);
+});
+
+console.log("\nsettling:");
+
+await check("an action on a never-idle page costs well under the old 8 s", async (p) => {
+  await p.goto(html(`<button>Noop</button><script>setInterval(()=>fetch('data:,x'),200)</script>`));
+  const s = await p.snapshot();
+  const t = Date.now();
+  const r = await p.clickById(s.elements[0]!.id);
+  assert.equal(r.ok, true, r.detail);
+  assert.ok(Date.now() - t < 3000, `took ${Date.now() - t} ms`);
+});
+
+await check("a click that navigates still lands on the new page", async (p) => {
+  const base = await site(p, {
+    "/": `<a href="/next">Go</a>`,
+    "/next": `<h1>Next</h1><button>Continue</button>`,
+  });
+  await p.goto(base + "/");
+  const s = await p.snapshot();
+  const r = await p.clickById(s.elements[0]!.id);
+  assert.equal(r.ok, true, r.detail);
+  assert.equal(r.changed, true);
+  assert.equal((await p.snapshot()).elements[0]?.name, "Continue");
 });
 
 await browser.close();
