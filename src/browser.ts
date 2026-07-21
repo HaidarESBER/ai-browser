@@ -607,8 +607,12 @@ export class AIPage {
     await this.page.reload();
   }
 
-  /** CORRECT: wait until the page has settled (network idle) before acting. */
-  async waitUntilReady(timeoutMs = 10_000): Promise<void> {
+  /**
+   * CORRECT: wait until the page has settled (network idle) before acting.
+   * Bounded short on purpose: pages with analytics beacons, chat widgets or
+   * polling never go network-idle, and every action would pay the full timeout.
+   */
+  async waitUntilReady(timeoutMs = 3000): Promise<void> {
     try {
       await this.page.waitForLoadState("networkidle", { timeout: timeoutMs });
     } catch {
@@ -749,7 +753,7 @@ export class AIPage {
       attempts = attempt;
       try {
         await fn();
-        await this.waitUntilReady(opts.settleTimeoutMs ?? 8000);
+        await this.waitUntilReady(opts.settleTimeoutMs ?? 1500);
         const after = await this.fingerprint();
         const changed =
           this.navCount > navBefore ||
