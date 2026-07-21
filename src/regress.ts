@@ -176,5 +176,23 @@ await check("a click that navigates still lands on the new page", async (p) => {
   assert.equal((await p.snapshot()).elements[0]?.name, "Continue");
 });
 
+console.log("\nchange detection:");
+
+await check("a checkbox toggle / menu open / relabel counts as a page change", async (p) => {
+  await p.goto(
+    html(`<input type=checkbox aria-label=Agree>
+      <button aria-expanded=false onclick="this.setAttribute('aria-expanded','true')">Menu</button>
+      <button onclick="this.textContent='Added'">Add</button>`),
+  );
+  const s = await p.snapshot();
+  for (const e of s.elements) {
+    const r = await p.clickById(e.id);
+    assert.equal(r.changed, true, `${e.name}: ${r.detail}`);
+  }
+  const d = await p.changes();
+  assert.equal(d.added.length + d.removed.length, 0);
+  assert.equal(d.changed.length, 3);
+});
+
 await browser.close();
 console.log(`\n✅ ${passed} regression tests passed.`);

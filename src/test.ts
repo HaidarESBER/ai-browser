@@ -114,6 +114,15 @@ check("detects a checkbox toggling to checked", () => {
   assert.equal(d.unchanged, 0);
 });
 
+check("a relabelled element with a durable id is 'changed', not removed + added", () => {
+  const prev = snap([{ id: "e7", role: "button", name: "Add", tag: "button" }]);
+  const next = snap([{ id: "e7", role: "button", name: "Added", tag: "button" }]);
+  const d = computeSnapshotDiff(prev, next);
+  assert.equal(d.added.length + d.removed.length, 0);
+  assert.equal(d.changed[0]?.from, 'name="Add"');
+  assert.equal(d.changed[0]?.to, 'name="Added"');
+});
+
 console.log("\nsameCharacters (input masks):");
 
 check("a reformatted phone number counts as the same input", () =>
