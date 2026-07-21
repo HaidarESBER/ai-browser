@@ -110,5 +110,35 @@ await check("refuses to guess between identical elements", async (p) => {
   assert.equal(await p.page.evaluate(() => (window as { clicked?: string }).clicked), undefined);
 });
 
+console.log("\nnon-idempotent actions:");
+
+await check("a click that errors after dispatch is not repeated", async (p) => {
+  // The handler counts the click, then blocks the page past Playwright's click timeout.
+  const handler = `window.n=(window.n||0)+1;const t=Date.now();while(Date.now()-t<7000){}`;
+  await p.goto(html(`<button onclick="${handler}">Place order</button>`));
+  const s = await p.snapshot();
+  const r = await p.clickById(s.elements[0]!.id);
+  assert.equal(r.ok, false, r.detail);
+  assert.equal(r.maybeApplied, true);
+  assert.equal(r.attempts, 1);
+  assert.equal(await p.page.evaluate(() => (window as { n?: number }).n), 1);
+});
+
+await check("press / hover / scroll report an ActionResult", async (p) => {
+  await p.goto(
+    html(`<form onsubmit="event.preventDefault();window.n=(window.n||0)+1"><input aria-label=q></form>
+      <button onmouseover="this.textContent='hovered'">Hover me</button>`),
+  );
+  const s = await p.snapshot();
+  await p.typeById(s.elements[0]!.id, "x");
+  const pr = await p.press("Enter");
+  assert.equal(pr.ok, true, pr.detail);
+  assert.equal(await p.page.evaluate(() => (window as { n?: number }).n), 1);
+  const hv = await p.hoverById(s.elements[1]!.id);
+  assert.equal(hv.ok, true, hv.detail);
+  const sc = await p.scrollBy(200);
+  assert.equal(sc.ok, true, sc.detail);
+});
+
 await browser.close();
 console.log(`\n✅ ${passed} regression tests passed.`);
