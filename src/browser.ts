@@ -8,7 +8,9 @@
 import {
   chromium,
   type Browser,
+  type Frame,
   type LaunchOptions,
+  type Locator,
   type Page,
 } from "playwright";
 
@@ -19,8 +21,10 @@ export interface SnapshotElement {
   name: string;
   tag: string;
   value?: string;
-  /** Active states the AI needs to act correctly: disabled, checked, expanded, … */
+  /** Active states the AI needs to act correctly: disabled, checked, expanded, obscured, … */
   state?: string[];
+  /** A <select>'s choices, as "Label" or "Label (value)" — what selectById accepts. */
+  options?: string[];
 }
 
 /** Compact, model-ready view of the page — enough to decide an action without pixels. */
@@ -281,6 +285,181 @@ export function elementMatchScore(e: SnapshotElement, query: string): number {
   return Math.max(0, base);
 }
 
+/** Everything the AI can act on: native controls, ARIA widgets, editable regions. */
+const INTERACTIVE = [
+  "a",
+  "button",
+  "input:not([type=hidden])",
+  "textarea",
+  "select",
+  "summary",
+  "[contenteditable='']",
+  "[contenteditable='true']",
+  "[onclick]",
+  "[tabindex]:not([tabindex='-1'])",
+  ...[
+    "button",
+    "link",
+    "checkbox",
+    "radio",
+    "switch",
+    "tab",
+    "menuitem",
+    "menuitemcheckbox",
+    "menuitemradio",
+    "option",
+    "combobox",
+    "textbox",
+    "searchbox",
+    "slider",
+    "spinbutton",
+    "treeitem",
+  ].map((r) => `[role="${r}"]`),
+].join(", ");
+
+/**
+ * Runs INSIDE a frame: stamps and describes every visible interactive element,
+ * including those inside open shadow roots. (No named helper functions in here:
+ * bundlers wrap them in helpers that don't exist inside the page.)
+ */
+const snapshotInPage = (arg: { firstId: number; selector: string }) => {
+  const results: SnapshotElement[] = [];
+  // Durable ids: we REUSE any id already stamped on an element — so a surviving
+  // element keeps the same id across snapshots. New ids come from a counter
+  // owned by the AIPage (not the document), so an id is never handed out twice,
+  // even after a navigation: a stale id from a previous page can't silently
+  // land on a different element of the new one.
+  let nextId = arg.firstId;
+  const seen = new Set<string>();
+  const w = window as unknown as { __aiDocId?: string };
+  if (w.__aiDocId === undefined) w.__aiDocId = Math.random().toString(36).slice(2);
+
+  // Web components: walk every open shadow root as well as the document.
+  const roots: (Document | ShadowRoot)[] = [document];
+  for (let i = 0; i < roots.length; i++) {
+    for (const host of Array.from(roots[i]!.querySelectorAll("*"))) {
+      if (host.shadowRoot) roots.push(host.shadowRoot);
+    }
+  }
+
+  for (const root of roots) {
+    for (const el of Array.from(root.querySelectorAll(arg.selector))) {
+      const rect = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      if (
+        rect.width === 0 ||
+        rect.height === 0 ||
+        style.visibility === "hidden" ||
+        style.display === "none"
+      ) {
+        continue;
+      }
+
+      // A node cloned by the page (innerHTML copy, template) carries its
+      // original's id — re-stamp duplicates so every id targets one element.
+      let id = el.getAttribute("data-ai-id");
+      if (!id || seen.has(id)) {
+        id = `e${nextId++}`;
+        el.setAttribute("data-ai-id", id);
+      }
+      seen.add(id);
+
+      // Accessible name, roughly in ARIA's order. Form controls never take their
+      // innerText (a <select>'s is every option glued together).
+      const field = el.matches("input, textarea, select");
+      const labelledBy = (el.getAttribute("aria-labelledby") ?? "")
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((ref) => root.getElementById(ref)?.textContent ?? "")
+        .join(" ");
+      // .labels covers both <label for=…> and label-wrapped inputs. A wrapping
+      // label also contains the control itself (and a select's options): drop it.
+      const labels = (el as HTMLInputElement).labels;
+      let labelText = "";
+      if (labels?.length) {
+        const copy = labels[0]!.cloneNode(true) as HTMLElement;
+        copy.querySelectorAll("input, select, textarea").forEach((n) => n.remove());
+        labelText = copy.textContent ?? "";
+      }
+      const buttonValue = el.matches("input[type=submit], input[type=button], input[type=reset]")
+        ? (el as HTMLInputElement).value
+        : "";
+      const name = (
+        labelledBy.trim() ||
+        el.getAttribute("aria-label") ||
+        (field ? "" : (el as HTMLElement).innerText) ||
+        labelText ||
+        buttonValue ||
+        el.getAttribute("placeholder") ||
+        el.getAttribute("title") ||
+        el.querySelector("img[alt]")?.getAttribute("alt") ||
+        ""
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+
+      const entry: SnapshotElement = {
+        id,
+        role: el.getAttribute("role") || el.tagName.toLowerCase(),
+        name: name.slice(0, 120),
+        tag: el.tagName.toLowerCase(),
+      };
+      const value = (el as HTMLInputElement).value;
+      // Never put a secret into the model's context (or the diff / trace):
+      // a password field only reports THAT it holds something.
+      const secret = el.matches("input[type=password]");
+      if (value) entry.value = secret ? "[redacted]" : value.slice(0, 120);
+
+      // A dropdown is only usable if the AI can see what it can pick.
+      if (el.tagName === "SELECT") {
+        const opts = Array.from((el as HTMLSelectElement).options);
+        entry.options = opts.slice(0, 25).map((o) => {
+          const label = o.text.replace(/\s+/g, " ").trim();
+          return o.value === label ? label : `${label} (${o.value})`;
+        });
+        if (opts.length > 25) entry.options.push(`… +${opts.length - 25} more`);
+      }
+
+      // State flags the AI needs to act correctly (don't click a disabled button, etc.).
+      const inp = el as unknown as {
+        disabled?: boolean;
+        checked?: boolean;
+        selected?: boolean;
+        required?: boolean;
+        readOnly?: boolean;
+      };
+      const s: string[] = [];
+      if (inp.disabled || el.getAttribute("aria-disabled") === "true") s.push("disabled");
+      if (
+        (el.matches("input[type=checkbox], input[type=radio]") && inp.checked) ||
+        el.getAttribute("aria-checked") === "true"
+      )
+        s.push("checked");
+      if (
+        (el.tagName === "OPTION" && inp.selected) ||
+        el.getAttribute("aria-selected") === "true"
+      )
+        s.push("selected");
+      if (el.getAttribute("aria-expanded") === "true") s.push("expanded");
+      if (inp.required || el.getAttribute("aria-required") === "true") s.push("required");
+      if (inp.readOnly || el.getAttribute("aria-readonly") === "true") s.push("readonly");
+      if (el === root.activeElement) s.push("focused");
+      if (style.opacity === "0") s.push("transparent");
+      // Covered by a modal, cookie banner or overlay: a click would land on that instead.
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      if (cx >= 0 && cy >= 0 && cx < innerWidth && cy < innerHeight) {
+        const hit = root.elementFromPoint(cx, cy);
+        if (hit && hit !== el && !el.contains(hit) && !hit.contains(el)) s.push("obscured");
+      }
+      if (s.length) entry.state = s;
+
+      results.push(entry);
+    }
+  }
+  return { elements: results, nextId, docId: w.__aiDocId, hasShadow: roots.length > 1 };
+};
+
 /**
  * An AI-facing wrapper around one browser page. Every method maps to a row of
  * the capability contract, so an agent (or the coming MCP server) has one
@@ -302,6 +481,10 @@ export class AIPage {
   private nextId = 0;
   // Identity of the document the last snapshot was taken from.
   private lastDocId: string | null = null;
+  // Which frame each id of the last snapshot lives in (iframes are walked too).
+  private idFrames = new Map<string, Frame>();
+  // False when the last snapshot saw content the DOM-version observer can't watch.
+  private lastCacheable = true;
 
   // The navigation's own document response — held aside so the per-page log
   // wipe below doesn't erase the very request that produced the current page.
@@ -387,6 +570,7 @@ export class AIPage {
     const version = await this.domVersion();
     if (
       opts.cache &&
+      this.lastCacheable &&
       this.lastSnapshot &&
       version === this.lastDomVersion &&
       this.lastSnapshot.url === this.page.url()
@@ -414,101 +598,37 @@ export class AIPage {
   }
 
   private async buildSnapshot(): Promise<Snapshot> {
-    const out = await this.withContextRetry(() => this.page.evaluate((firstId) => {
-      const SELECTOR =
-        'a, button, input, textarea, select, [role="button"], [role="link"], [onclick]';
-      const results: SnapshotElement[] = [];
-      // Durable ids: we REUSE any id already stamped on an element — so a surviving
-      // element keeps the same id across snapshots. New ids come from a counter
-      // owned by the AIPage (not the document), so an id is never handed out twice,
-      // even after a navigation: a stale id from a previous page can't silently
-      // land on a different element of the new one.
-      let nextId = firstId;
-      const seen = new Set<string>();
-      const w = window as unknown as { __aiDocId?: string };
-      if (w.__aiDocId === undefined) w.__aiDocId = Math.random().toString(36).slice(2);
-
-      for (const el of Array.from(document.querySelectorAll(SELECTOR))) {
-        const rect = el.getBoundingClientRect();
-        const style = getComputedStyle(el);
-        if (
-          rect.width === 0 ||
-          rect.height === 0 ||
-          style.visibility === "hidden" ||
-          style.display === "none"
-        ) {
-          continue;
-        }
-
-        // A node cloned by the page (innerHTML copy, template) carries its
-        // original's id — re-stamp duplicates so every id targets one element.
-        let id = el.getAttribute("data-ai-id");
-        if (!id || seen.has(id)) {
-          id = `e${nextId++}`;
-          el.setAttribute("data-ai-id", id);
-        }
-        seen.add(id);
-
-        // .labels covers both <label for=…> and label-wrapped inputs, which
-        // otherwise have no accessible name at all (common on plain HTML forms).
-        const labels = (el as HTMLInputElement).labels;
-        const labelText = labels?.length
-          ? (labels[0].innerText || labels[0].textContent || "").trim().replace(/\s+/g, " ")
-          : "";
-        const name =
-          (el as HTMLElement).innerText?.trim() ||
-          el.getAttribute("aria-label") ||
-          el.getAttribute("placeholder") ||
-          labelText ||
-          el.getAttribute("title") ||
-          "";
-
-        const entry: SnapshotElement = {
-          id,
-          role: el.getAttribute("role") || el.tagName.toLowerCase(),
-          name: name.slice(0, 120),
-          tag: el.tagName.toLowerCase(),
-        };
-        const value = (el as HTMLInputElement).value;
-        // Never put a secret into the model's context (or the diff / trace):
-        // a password field only reports THAT it holds something.
-        const secret = el.matches("input[type=password]");
-        if (value) entry.value = secret ? "[redacted]" : value.slice(0, 120);
-
-        // State flags the AI needs to act correctly (don't click a disabled button, etc.).
-        const inp = el as unknown as {
-          disabled?: boolean;
-          checked?: boolean;
-          selected?: boolean;
-          required?: boolean;
-          readOnly?: boolean;
-        };
-        const s: string[] = [];
-        if (inp.disabled || el.getAttribute("aria-disabled") === "true") s.push("disabled");
-        if (
-          (el.matches("input[type=checkbox], input[type=radio]") && inp.checked) ||
-          el.getAttribute("aria-checked") === "true"
-        )
-          s.push("checked");
-        if (
-          (el.tagName === "OPTION" && inp.selected) ||
-          el.getAttribute("aria-selected") === "true"
-        )
-          s.push("selected");
-        if (el.getAttribute("aria-expanded") === "true") s.push("expanded");
-        if (inp.required || el.getAttribute("aria-required") === "true") s.push("required");
-        if (inp.readOnly || el.getAttribute("aria-readonly") === "true") s.push("readonly");
-        if (el === document.activeElement) s.push("focused");
-        if (s.length) entry.state = s;
-
-        results.push(entry);
+    const elements: SnapshotElement[] = [];
+    const idFrames = new Map<string, Frame>();
+    let docId: string | null = null;
+    let cacheable = true;
+    // Same-origin and cross-origin iframes alike: each frame is walked on its own
+    // and its elements are remembered as living there, so actions target the frame.
+    for (const frame of this.page.frames()) {
+      if (frame.isDetached()) continue;
+      const main = frame === this.page.mainFrame();
+      const walk = () =>
+        frame.evaluate(snapshotInPage, { firstId: this.nextId, selector: INTERACTIVE });
+      let out: Awaited<ReturnType<typeof walk>>;
+      try {
+        out = main ? await this.withContextRetry(walk) : await walk();
+      } catch (err) {
+        if (main) throw err;
+        continue; // a child frame navigating or detaching mid-walk: skip it
       }
-      return { elements: results, nextId, docId: w.__aiDocId };
-    }, this.nextId));
-
-    this.nextId = Math.max(this.nextId, out.nextId);
-    this.lastDocId = out.docId;
-    return { url: this.page.url(), title: await this.page.title(), elements: out.elements };
+      this.nextId = Math.max(this.nextId, out.nextId);
+      for (const e of out.elements) {
+        idFrames.set(e.id, frame);
+        elements.push(e);
+      }
+      if (main) docId = out.docId;
+      // The DOM-version observer only sees the main document's light DOM.
+      if (out.hasShadow || (!main && out.elements.length)) cacheable = false;
+    }
+    this.idFrames = idFrames;
+    this.lastDocId = docId;
+    this.lastCacheable = cacheable;
+    return { url: this.page.url(), title: await this.page.title(), elements };
   }
 
   /**
@@ -648,11 +768,11 @@ export class AIPage {
     return this.reliableOnElement(id, "click", async (sel) => {
       // Short existence check (fast failure if the id is gone), then a more
       // generous actionability window (slow-rendering / throttled pages).
-      await this.page.waitForSelector(sel, { state: "visible", timeout: 5000 });
+      await sel.waitFor({ state: "visible", timeout: 5000 });
       // Wait for actionability WITHOUT clicking — failures up to here are safe to retry.
-      await this.page.click(sel, { timeout: 10000, trial: true });
+      await sel.click({ timeout: 10000, trial: true });
       try {
-        await this.page.click(sel, { timeout: 5000 });
+        await sel.click({ timeout: 5000 });
       } catch (err) {
         // The click may have been dispatched (submit, purchase…): never repeat it.
         throw new MaybeAppliedError(err);
@@ -669,19 +789,24 @@ export class AIPage {
     let reformatted: string | null = null;
     const result = await this.reliableOnElement(id, "type into", async (sel) => {
       reformatted = null;
-      await this.page.waitForSelector(sel, { state: "visible", timeout: 5000 });
-      await this.page.fill(sel, text);
-      const actual = await this.page.inputValue(sel);
+      await sel.waitFor({ state: "visible", timeout: 5000 });
+      await sel.fill(text);
+      // Inputs report .value; contenteditable regions their text.
+      const actual = await sel.evaluate((el) =>
+        "value" in el
+          ? String((el as HTMLInputElement).value)
+          : (el as HTMLElement).innerText.replace(/\n$/, ""),
+      );
       if (actual !== text && sameCharacters(actual, text)) {
-        const secret = await this.page
-          .$eval(sel, (el) => el.matches("input[type=password]"))
+        const secret = await sel
+          .evaluate((el) => el.matches("input[type=password]"))
           .catch(() => true);
         if (!secret) reformatted = actual;
         return;
       }
       if (actual !== text) {
-        const secret = await this.page
-          .$eval(sel, (el) => el.matches("input[type=password]"))
+        const secret = await sel
+          .evaluate((el) => el.matches("input[type=password]"))
           .catch(() => true);
         throw new Error(
           secret
@@ -699,16 +824,21 @@ export class AIPage {
   /** Select an option by id, with reliability + self-healing. */
   async selectById(id: string, value: string): Promise<ActionResult> {
     return this.reliableOnElement(id, `select "${value}" in`, async (sel) => {
-      await this.page.waitForSelector(sel, { state: "visible", timeout: 5000 });
-      await this.page.selectOption(sel, value, { timeout: 10000 });
+      await sel.waitFor({ state: "visible", timeout: 5000 });
+      // Accept an option's value or its visible label.
+      const labels = await sel.evaluate((el) =>
+        Array.from((el as HTMLSelectElement).options).map((o) => [o.value, o.text.trim()]),
+      );
+      const byLabel = !labels.some(([v]) => v === value) && labels.some(([, l]) => l === value);
+      await sel.selectOption(byLabel ? { label: value } : value, { timeout: 10000 });
     });
   }
 
   /** Hover an element by id, with reliability + self-healing (hovering twice is harmless). */
   async hoverById(id: string): Promise<ActionResult> {
     return this.reliableOnElement(id, "hover", async (sel) => {
-      await this.page.waitForSelector(sel, { state: "visible", timeout: 5000 });
-      await this.page.hover(sel, { timeout: 10000 });
+      await sel.waitFor({ state: "visible", timeout: 5000 });
+      await sel.hover({ timeout: 10000 });
     });
   }
 
@@ -823,7 +953,7 @@ export class AIPage {
   private async reliableOnElement(
     id: string,
     verb: string,
-    act: (selector: string) => Promise<void>,
+    act: (target: Locator) => Promise<void>,
   ): Promise<ActionResult> {
     const first = await this.reliable(`${verb} ${id}`, () => act(this.sel(id)), { retries: 1 });
     if (first.ok || first.maybeApplied) return first;
@@ -866,10 +996,8 @@ export class AIPage {
    */
   private async fingerprint(): Promise<PageFingerprint> {
     try {
-      const { elementCount, stateHash } = await this.page.evaluate(() => {
-        const els = document.querySelectorAll(
-          'a, button, input, textarea, select, [role="button"], [role="link"], [onclick]',
-        );
+      const { elementCount, stateHash } = await this.page.evaluate((selector) => {
+        const els = document.querySelectorAll(selector);
         // (No helper functions in here: bundlers wrap them in helpers that don't
         // exist inside the page.)
         const parts: string[] = [];
@@ -892,7 +1020,7 @@ export class AIPage {
         let h = 5381;
         for (let i = 0; i < all.length; i++) h = ((h * 33) ^ all.charCodeAt(i)) >>> 0;
         return { elementCount: els.length, stateHash: h.toString(36) };
-      });
+      }, INTERACTIVE);
       return { url: this.page.url(), title: await this.page.title(), elementCount, stateHash };
     } catch {
       // Page may be mid-navigation (execution context destroyed) — best effort,
@@ -901,8 +1029,10 @@ export class AIPage {
     }
   }
 
-  private sel(id: string): string {
-    return `[data-ai-id="${id}"]`;
+  /** Locate an element by id in the frame its snapshot found it in (pierces open shadow DOM). */
+  private sel(id: string): Locator {
+    const frame = this.idFrames.get(id) ?? this.page.mainFrame();
+    return frame.locator(`[data-ai-id="${id}"]`);
   }
 }
 
