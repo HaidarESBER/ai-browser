@@ -115,6 +115,8 @@ if (process.stdin.isTTY) {
 let browser: AIBrowser | null = null;
 let page: AIPage | null = null;
 let live: LiveView | null = null;
+// Every open tab, in the order they were opened; `page` is the one being driven.
+let tabs: AIPage[] = [];
 
 const TOOL_TIMEOUT_MS = 45_000;
 
@@ -162,6 +164,7 @@ function run<T>(fn: () => Promise<T>): Promise<T> {
 /** Drop the current session so the next getPage() relaunches (S4 recovery). */
 function resetState(): void {
   page = null;
+  tabs = [];
   browser = null;
   void live?.stop().catch(() => undefined);
   live = null;
@@ -177,15 +180,14 @@ async function getPage(): Promise<AIPage> {
   if (!page) {
     const headed = process.env.AI_BROWSER_HEADED === "1";
     browser = await AIBrowser.launch({ headless: !headed });
-    page = await browser.newPage();
-
-    // S4: if the page closes or the browser crashes/disconnects, drop the session
-    // so the next tool call transparently relaunches instead of throwing forever.
-    page.page.on("close", resetState);
-    page.page.context().browser()?.on("disconnected", resetState);
+    const first = await browser.newPage();
+    // S4: if the browser crashes/disconnects, drop the session so the next tool
+    // call transparently relaunches instead of throwing forever.
+    first.page.context().browser()?.on("disconnected", resetState);
+    adoptTab(first);
 
     if (process.env.AI_BROWSER_LIVE !== "0") {
-      live = new LiveView(page);
+      live = new LiveView(first);
       try {
         const url = await live.start();
         console.error(`[ecobrowser] live view: ${url}`);
@@ -195,7 +197,34 @@ async function getPage(): Promise<AIPage> {
       }
     }
   }
-  return page;
+  return page!;
+}
+
+/** Start driving a tab; when it closes, fall back to the previous one (or a fresh session). */
+function adoptTab(tab: AIPage): void {
+  tabs.push(tab);
+  page = tab;
+  live?.setPage(tab);
+  tab.page.on("close", () => {
+    tabs = tabs.filter((t) => t !== tab);
+    if (page !== tab) return;
+    page = tabs[tabs.length - 1] ?? null;
+    if (page) live?.setPage(page);
+    else resetState();
+  });
+}
+
+/**
+ * After an action: if it opened new tabs, switch to the newest so the AI keeps
+ * following what it clicked, and say so. Returns the text to prepend, or "".
+ */
+async function followNewTabs(p: AIPage): Promise<string> {
+  const opened = p.takeNewTabs();
+  if (!opened.length) return "";
+  for (const t of opened) adoptTab(new AIPage(t));
+  const current = await getPage();
+  await current.waitUntilReady();
+  return `Switched to the new tab (${tabs.length} open; browser_tabs lists them).\n${formatSnapshot(await current.snapshot())}`;
 }
 
 /** Wrap a string as an MCP text result. */
@@ -338,6 +367,8 @@ server.tool(
       const since = Date.now();
       const result = await p.clickById(id);
       if (!result.ok) return text(result.detail);
+      const switched = await followNewTabs(p);
+      if (switched) return text(`${result.detail}\n\n${switched}`);
       return text(await actionResponse(p, result.detail, since));
     }),
 );
@@ -356,6 +387,36 @@ server.tool(
       const result = await p.typeById(id, value);
       if (!result.ok) return text(result.detail);
       return text(await actionResponse(p, result.detail, since));
+    }),
+);
+
+server.tool(
+  "browser_tabs",
+  "List the open tabs (the current one is marked). Links with target=_blank open a new tab and the browser switches to it automatically.",
+  {},
+  async () =>
+    run(async () => {
+      await getPage();
+      const lines = await Promise.all(
+        tabs.map(async (t, i) => `${t === page ? "*" : " "} [${i}] ${await t.page.title().catch(() => "")} — ${t.page.url()}`),
+      );
+      return text(lines.join("\n"));
+    }),
+);
+
+server.tool(
+  "browser_switch_tab",
+  "Switch to an open tab by its index from browser_tabs, and return its snapshot.",
+  { index: z.number().int().min(0).describe("Tab index from browser_tabs") },
+  async ({ index }) =>
+    run(async () => {
+      await getPage();
+      const tab = tabs[index];
+      if (!tab) return text(`No tab ${index}; ${tabs.length} open.`);
+      page = tab;
+      live?.setPage(tab);
+      await tab.page.bringToFront();
+      return text(formatSnapshot(await tab.snapshot()));
     }),
 );
 
@@ -436,6 +497,7 @@ server.tool(
         /* ignore */
       }
       page = null;
+      tabs = [];
       browser = null;
       live = null;
       return text("Browser session reset. A fresh session will start on the next action.");

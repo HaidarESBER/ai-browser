@@ -89,6 +89,8 @@ export interface ActionResult {
   error?: string;
   /** The action failed after it may already have taken effect, so it was not retried. */
   maybeApplied?: boolean;
+  /** URLs of tabs/popups the action opened (take them with takeNewTabs()). */
+  newTabs?: string[];
   before?: PageFingerprint;
   after?: PageFingerprint;
 }
@@ -511,6 +513,8 @@ export class AIPage {
   private readonly consoleLog: ConsoleEntry[] = [];
   private readonly networkLog: NetworkEntry[] = [];
   private readonly eventLog: PageEvent[] = [];
+  // Tabs / popups this page opened (target=_blank, window.open) not yet taken.
+  private readonly openedTabs: Page[] = [];
 
   // Speed: remember the last snapshot + DOM version to serve cache hits and diffs.
   private lastSnapshot: Snapshot | null = null;
@@ -550,6 +554,9 @@ export class AIPage {
         return host && isPrivateHost(host) ? route.abort("blockedbyclient") : route.continue();
       });
     }
+    // A link with target=_blank or a window.open() opens a NEW page: keep it, so
+    // the action can report it and the caller can follow it.
+    page.on("popup", (popup) => this.openedTabs.push(popup));
     // CHECK: tap console + page errors + network as they happen (first-class).
     page.on("console", (msg) =>
       this.pushCapped(this.consoleLog, { type: msg.type(), text: msg.text(), ts: Date.now() }),
@@ -771,6 +778,11 @@ export class AIPage {
     this.networkLog.length = 0;
   }
 
+  /** Tabs/popups opened since the last call, oldest first — wrap one in `new AIPage(tab)` to drive it. */
+  takeNewTabs(): Page[] {
+    return this.openedTabs.splice(0);
+  }
+
   /** Recorded action/navigation events — the trace shown in the live view. */
   events(): PageEvent[] {
     return [...this.eventLog];
@@ -835,11 +847,21 @@ export class AIPage {
       await sel.waitFor({ state: "visible", timeout: 5000 });
       // Wait for actionability WITHOUT clicking — failures up to here are safe to retry.
       await sel.click({ timeout: 10000, trial: true });
+      // A link / form with a target opens a new tab, which shows up a moment AFTER
+      // the click resolves: wait for it, so the result can report it.
+      const opensTab = await sel.evaluate((el) => {
+        const t = el.closest("a, area, form")?.getAttribute("target")?.toLowerCase();
+        return !!t && t !== "_self" && t !== "_parent" && t !== "_top";
+      });
+      const tabsBefore = this.openedTabs.length;
       try {
         await sel.click({ timeout: 5000 });
       } catch (err) {
         // The click may have been dispatched (submit, purchase…): never repeat it.
         throw new MaybeAppliedError(err);
+      }
+      if (opensTab && this.openedTabs.length === tabsBefore) {
+        await this.page.waitForEvent("popup", { timeout: 3000 }).catch(() => undefined);
       }
     });
   }
@@ -960,6 +982,7 @@ export class AIPage {
     const backoffMs = opts.backoffMs ?? 300;
     const before = await this.fingerprint();
     const navBefore = this.navCount;
+    const tabsBefore = this.openedTabs.length;
 
     let lastError: unknown;
     let attempts = 0;
@@ -969,15 +992,31 @@ export class AIPage {
         await fn();
         await this.waitUntilReady(opts.settleTimeoutMs ?? 1500);
         const after = await this.fingerprint();
+        const opened = this.openedTabs.slice(tabsBefore);
+        await Promise.all(
+          opened.map((t) => t.waitForLoadState("domcontentloaded", { timeout: 3000 }).catch(() => undefined)),
+        );
+        const newTabs = opened.map((t) => t.url());
         const changed =
+          newTabs.length > 0 ||
           this.navCount > navBefore ||
           before.url !== after.url ||
           before.title !== after.title ||
           before.elementCount !== after.elementCount ||
           before.stateHash !== after.stateHash;
-        const detail = `${action} succeeded${changed ? " (page changed)" : " (no visible page change)"}.`;
+        const tabNote = newTabs.length ? ` Opened ${newTabs.length} new tab(s): ${newTabs.join(", ")}.` : "";
+        const detail = `${action} succeeded${changed ? " (page changed)" : " (no visible page change)"}.${tabNote}`;
         this.record("action", detail);
-        return { ok: true, action, changed, attempts: attempt, before, after, detail };
+        return {
+          ok: true,
+          action,
+          changed,
+          attempts: attempt,
+          before,
+          after,
+          detail,
+          ...(newTabs.length ? { newTabs } : {}),
+        };
       } catch (err) {
         lastError = err;
         if (err instanceof MaybeAppliedError) break;

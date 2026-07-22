@@ -79,9 +79,15 @@ export class LiveView {
   private inflight: Promise<Buffer> | null = null;
 
   constructor(
-    private readonly page: AIPage,
+    private page: AIPage,
     private readonly port = 7333,
   ) {}
+
+  /** Follow a different page (e.g. the AI switched to a newly opened tab). */
+  setPage(page: AIPage): void {
+    this.page = page;
+    this.lastFrame = null;
+  }
 
   /** Start the server; resolves with the URL to open. Falls back across ports if busy. */
   start(): Promise<string> {
