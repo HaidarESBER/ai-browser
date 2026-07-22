@@ -194,5 +194,71 @@ await check("a checkbox toggle / menu open / relabel counts as a page change", a
   assert.equal(d.changed.length, 3);
 });
 
+console.log("\nperception coverage:");
+
+await check("ARIA widgets, contenteditable and summary are visible", async (p) => {
+  await p.goto(
+    html(`<div role=checkbox aria-checked=false tabindex=0>Remember me</div>
+      <div role=tab>Settings</div><div contenteditable=true aria-label=Comment></div>
+      <details><summary>More</summary></details>`),
+  );
+  const names = (await p.snapshot()).elements.map((e) => `${e.role}:${e.name}`);
+  for (const want of ["checkbox:Remember me", "tab:Settings", "div:Comment", "summary:More"]) {
+    assert.ok(names.includes(want), `${want} missing from ${names.join(", ")}`);
+  }
+});
+
+await check("elements inside open shadow DOM can be seen and clicked", async (p) => {
+  await p.goto(
+    html(`<x-btn></x-btn><script>
+      customElements.define('x-btn', class extends HTMLElement { connectedCallback() {
+        this.attachShadow({mode:'open'}).innerHTML = '<button onclick="window.top.hit=1">Shadow buy</button>';
+      }});</script>`),
+  );
+  const e = (await p.snapshot()).elements.find((x) => x.name === "Shadow buy");
+  assert.ok(e, "shadow button not in snapshot");
+  const r = await p.clickById(e.id);
+  assert.equal(r.ok, true, r.detail);
+  assert.equal(await p.page.evaluate(() => (window as { hit?: number }).hit), 1);
+});
+
+await check("elements inside iframes can be seen, typed into and clicked", async (p) => {
+  const base = await site(p, {
+    "/": `<h1>Outer</h1><iframe src="/inner"></iframe>`,
+    "/inner": `<input aria-label="Card number"><button onclick="parent.paid=1">Pay</button>`,
+  });
+  await p.goto(base + "/");
+  await p.waitUntilReady();
+  const s = await p.snapshot();
+  const field = s.elements.find((e) => e.name === "Card number");
+  const pay = s.elements.find((e) => e.name === "Pay");
+  assert.ok(field && pay, JSON.stringify(s.elements));
+  assert.equal((await p.typeById(field.id, "4242")).ok, true);
+  assert.equal((await p.clickById(pay.id)).ok, true);
+  assert.equal(await p.page.evaluate(() => (window as { paid?: number }).paid), 1);
+});
+
+await check("dropdowns list their options and accept a label", async (p) => {
+  await p.goto(
+    html(`<label>Country <select><option value=fr>France</option><option value=de>Germany</option></select></label>`),
+  );
+  const sel = (await p.snapshot()).elements[0]!;
+  assert.equal(sel.name, "Country");
+  assert.deepEqual(sel.options, ["France (fr)", "Germany (de)"]);
+  assert.equal((await p.selectById(sel.id, "Germany")).ok, true);
+  assert.equal((await p.snapshot()).elements[0]!.value, "de");
+});
+
+await check("aria-labelledby names a control; covered elements are flagged", async (p) => {
+  await p.goto(
+    html(`<span id=l>Email address</span><input aria-labelledby=l>
+      <button>Behind</button>
+      <div style="position:fixed;inset:0;background:#0008">Cookie banner</div>`),
+  );
+  const s = await p.snapshot();
+  assert.equal(s.elements[0]!.name, "Email address");
+  assert.ok(s.elements.find((e) => e.name === "Behind")?.state?.includes("obscured"));
+});
+
 await browser.close();
 console.log(`\n✅ ${passed} regression tests passed.`);

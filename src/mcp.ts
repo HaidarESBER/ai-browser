@@ -210,10 +210,12 @@ function formatElement(e: {
   name: string;
   value?: string;
   state?: string[];
+  options?: string[];
 }): string {
   const value = e.value ? ` value="${e.value}"` : "";
   const state = e.state?.length ? ` [${e.state.join(",")}]` : "";
-  return `[${e.id}] <${e.tag}> role=${e.role} name="${e.name}"${value}${state}`;
+  const options = e.options?.length ? ` options: ${e.options.join(" | ")}` : "";
+  return `[${e.id}] <${e.tag}> role=${e.role} name="${e.name}"${value}${state}${options}`;
 }
 
 /** Render a snapshot as compact, model-friendly text. */
