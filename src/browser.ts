@@ -8,6 +8,7 @@
 import {
   chromium,
   type Browser,
+  type BrowserContext,
   type Frame,
   type LaunchOptions,
   type Locator,
@@ -1141,18 +1142,50 @@ export class AIPage {
 
 /** Launches and owns a browser; hands out AI-facing pages. */
 export class AIBrowser {
-  private constructor(private readonly browser: Browser) {}
+  private firstPageTaken = false;
 
-  /** Headed by default so a human can watch — the "Pleasant" pillar. */
+  private constructor(
+    private readonly browser: Browser | null,
+    private readonly profile: BrowserContext | null,
+  ) {}
+
+  /**
+   * A throwaway browser: every page gets a fresh, isolated context (no cookies
+   * carried over). Headed by default so a human can watch — the "Pleasant" pillar.
+   */
   static async launch(opts: LaunchOptions = { headless: false }): Promise<AIBrowser> {
-    return new AIBrowser(await chromium.launch(opts));
+    return new AIBrowser(await chromium.launch(opts), null);
+  }
+
+  /**
+   * A browser with a persistent profile in `userDataDir`: cookies, logins and
+   * storage survive across runs, so the AI can stay signed in. All pages share it.
+   */
+  static async launchPersistent(
+    userDataDir: string,
+    opts: LaunchOptions = { headless: false },
+  ): Promise<AIBrowser> {
+    return new AIBrowser(null, await chromium.launchPersistentContext(userDataDir, opts));
   }
 
   async newPage(): Promise<AIPage> {
-    return new AIPage(await this.browser.newPage());
+    if (!this.profile) return new AIPage(await this.browser!.newPage());
+    // A persistent context opens with one blank tab: use it rather than leave it behind.
+    const first = this.profile.pages()[0];
+    if (!this.firstPageTaken && first) {
+      this.firstPageTaken = true;
+      return new AIPage(first);
+    }
+    return new AIPage(await this.profile.newPage());
+  }
+
+  /** Runs once if the browser crashes or is closed from outside. */
+  onDisconnect(fn: () => void): void {
+    if (this.browser) this.browser.on("disconnected", fn);
+    else this.profile!.on("close", fn);
   }
 
   async close(): Promise<void> {
-    await this.browser.close();
+    await (this.browser ?? this.profile)!.close();
   }
 }

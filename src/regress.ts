@@ -4,6 +4,9 @@
  * Run with: npm run regress
  */
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { AIBrowser, AIPage } from "./browser.js";
 
 const browser = await AIBrowser.launch({ headless: true });
@@ -314,6 +317,32 @@ await check("a target=_blank click reports the new tab and hands it over", async
   assert.equal((await docs.snapshot()).elements[0]?.name, "Read more");
   assert.equal(p.takeNewTabs().length, 0);
   await tab.close();
+});
+
+console.log("\npersistent profile:");
+
+await check("launchPersistent keeps storage across browser restarts", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "ecobrowser-profile-"));
+  const serve = (p: AIPage) =>
+    p.page.context().route("https://fixture.test/**", (r) => r.fulfill({ contentType: "text/html", body: "<h1>x</h1>" }));
+  try {
+    let b = await AIBrowser.launchPersistent(dir, { headless: true });
+    let p = await b.newPage();
+    assert.equal(p.page.context().pages().length, 1, "the initial blank tab is reused");
+    await serve(p);
+    await p.goto("https://fixture.test/");
+    await p.page.evaluate(() => localStorage.setItem("session", "signed-in"));
+    await b.close();
+
+    b = await AIBrowser.launchPersistent(dir, { headless: true });
+    p = await b.newPage();
+    await serve(p);
+    await p.goto("https://fixture.test/");
+    assert.equal(await p.page.evaluate(() => localStorage.getItem("session")), "signed-in");
+    await b.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 await browser.close();
