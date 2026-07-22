@@ -63,6 +63,7 @@ function printHelp(): void {
       row("AI_BROWSER_LIVE=0", "disable the live-view server"),
       row("AI_BROWSER_LIVE_PORT=N", "preferred live-view port (default 7333)"),
       row("AI_BROWSER_ALLOW_LOCAL=1", "allow file:// / privileged navigation"),
+      row("AI_BROWSER_BLOCK_PRIVATE=1", "block localhost / private-network hosts"),
       "",
       `  ${head("DOCS")}   ${cyan("https://github.com/HaidarESBER/ai-browser")}`,
       "",
