@@ -260,5 +260,36 @@ await check("aria-labelledby names a control; covered elements are flagged", asy
   assert.ok(s.elements.find((e) => e.name === "Behind")?.state?.includes("obscured"));
 });
 
+console.log("\nnavigation:");
+
+await check("goto accepts a bare domain", async (p) => {
+  await p.page.route("https://fixture.test/**", (r) => r.fulfill({ contentType: "text/html", body: "<a href=/>ok</a>" }));
+  await p.goto("fixture.test/start");
+  assert.equal(p.page.url(), "https://fixture.test/start");
+});
+
+await check("AI_BROWSER_BLOCK_PRIVATE blocks private hosts, including in-page requests", async () => {
+  process.env.AI_BROWSER_BLOCK_PRIVATE = "1";
+  const p = await browser.newPage();
+  delete process.env.AI_BROWSER_BLOCK_PRIVATE;
+  try {
+    await assert.rejects(p.goto("http://169.254.169.254/latest/meta-data"), /private-network/);
+    await p.page.route("https://fixture.test/**", (r) =>
+      r.fulfill({ contentType: "text/html", body: "<h1>public</h1>" }),
+    );
+    await p.goto("https://fixture.test/");
+    const leaked = await p.page.evaluate(() =>
+      fetch("http://127.0.0.1:9/").then(
+        () => "reached",
+        (e: Error) => e.message,
+      ),
+    );
+    assert.notEqual(leaked, "reached");
+    assert.ok(p.network().every((n) => !n.url.includes("127.0.0.1")));
+  } finally {
+    await p.page.close();
+  }
+});
+
 await browser.close();
 console.log(`\n✅ ${passed} regression tests passed.`);

@@ -11,6 +11,8 @@ export {
   computeSnapshotDiff,
   elementMatchScore,
   isBlockedNavigation,
+  isPrivateHost,
+  normalizeUrl,
   sameCharacters,
   type ActionResult,
   type ConsoleEntry,

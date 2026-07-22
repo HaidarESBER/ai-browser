@@ -133,20 +133,62 @@ const BLOCKED_SCHEMES = new Set([
   "javascript:",
 ]);
 
+/** Loopback names, for which a scheme-less URL means plain http (a local dev server). */
+const LOOPBACK = /^(localhost|127(\.\d{1,3}){3}|\[::1\]|0\.0\.0\.0)$/i;
+
 /**
- * True if navigating to this URL should be blocked (local-file / privileged
- * scheme) — a guard against an AI being steered into reading local files or
- * internal privileged pages. Pass allowLocal to opt out.
+ * Turn what a model typically types into a URL Playwright accepts:
+ * "example.com/x" → "https://example.com/x", "localhost:3000" → "http://localhost:3000",
+ * "//cdn.site" → "https://cdn.site". Anything with a scheme is left alone.
  */
-export function isBlockedNavigation(url: string, allowLocal = false): boolean {
-  if (allowLocal) return false;
-  let protocol: string;
-  try {
-    protocol = new URL(url).protocol.toLowerCase();
-  } catch {
-    return false; // relative / scheme-less — Playwright resolves it to https
+export function normalizeUrl(url: string): string {
+  const u = url.trim();
+  if (u.startsWith("//")) return `https:${u}`;
+  const hostPort = /^([\w.-]+|\[[\da-f:]+\]):\d+(\/|\?|#|$)/i.exec(u);
+  if (!hostPort && /^[a-z][a-z\d+.-]*:/i.test(u)) return u; // has a scheme
+  const host = (hostPort?.[1] ?? u.split(/[/?#:]/)[0] ?? "").toLowerCase();
+  return `${LOOPBACK.test(host) ? "http" : "https"}://${u}`;
+}
+
+/**
+ * True if a hostname is loopback, private-network, link-local (cloud metadata
+ * endpoints live at 169.254.169.254) or a local-only name. Literal names only —
+ * a public name that resolves to a private address is not caught.
+ */
+export function isPrivateHost(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (h === "localhost" || /\.(localhost|local|internal|lan|home\.arpa)$/.test(h)) return true;
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(h);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168)
+    );
   }
-  return BLOCKED_SCHEMES.has(protocol);
+  return h === "::" || h === "::1" || /^f[cd][\da-f]{2}:/.test(h) || /^fe[89ab][\da-f]:/.test(h);
+}
+
+/**
+ * True if navigating to this URL should be blocked: a local-file / privileged
+ * scheme (a guard against an AI being steered into reading local files or
+ * internal privileged pages) — and, with blockPrivate, any loopback or
+ * private-network host. Pass allowLocal to opt out of the scheme guard.
+ */
+export function isBlockedNavigation(url: string, allowLocal = false, blockPrivate = false): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(normalizeUrl(url));
+  } catch {
+    return false; // not a URL at all — Playwright will reject it
+  }
+  if (!allowLocal && BLOCKED_SCHEMES.has(parsed.protocol.toLowerCase())) return true;
+  return blockPrivate && /^(https?|wss?|ftp):$/i.test(parsed.protocol) && isPrivateHost(parsed.hostname);
 }
 
 /**
@@ -490,7 +532,24 @@ export class AIPage {
   // wipe below doesn't erase the very request that produced the current page.
   private pendingDocResponse: NetworkEntry | null = null;
 
+  // AI_BROWSER_BLOCK_PRIVATE=1: refuse loopback / private-network hosts, for agents
+  // that follow untrusted content (off by default — local dev servers are a main use).
+  private readonly blockPrivate = process.env.AI_BROWSER_BLOCK_PRIVATE === "1";
+
   constructor(public readonly page: Page) {
+    if (this.blockPrivate) {
+      // Enforce it for every request the page makes, not just goto(): a link, a
+      // redirect or a fetch() to an internal address is just as much of a leak.
+      void page.route("**/*", (route) => {
+        let host = "";
+        try {
+          host = new URL(route.request().url()).hostname;
+        } catch {
+          /* data:, blob: … */
+        }
+        return host && isPrivateHost(host) ? route.abort("blockedbyclient") : route.continue();
+      });
+    }
     // CHECK: tap console + page errors + network as they happen (first-class).
     page.on("console", (msg) =>
       this.pushCapped(this.consoleLog, { type: msg.type(), text: msg.text(), ts: Date.now() }),
@@ -730,7 +789,12 @@ export class AIPage {
         `navigation to "${url}" is blocked (local-file/privileged scheme). Set AI_BROWSER_ALLOW_LOCAL=1 to allow.`,
       );
     }
-    await this.page.goto(url, { timeout: opts.timeoutMs, waitUntil: opts.waitUntil });
+    if (isBlockedNavigation(url, true, this.blockPrivate)) {
+      throw new Error(
+        `navigation to "${url}" is blocked (private-network host; AI_BROWSER_BLOCK_PRIVATE=1 is set).`,
+      );
+    }
+    await this.page.goto(normalizeUrl(url), { timeout: opts.timeoutMs, waitUntil: opts.waitUntil });
     // navigation is recorded by the framenavigated listener
   }
 

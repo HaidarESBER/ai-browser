@@ -7,6 +7,8 @@ import {
   computeSnapshotDiff,
   elementMatchScore,
   isBlockedNavigation,
+  isPrivateHost,
+  normalizeUrl,
   sameCharacters,
   type Snapshot,
   type SnapshotElement,
@@ -72,6 +74,35 @@ check("allows scheme-less URLs", () => assert.equal(isBlockedNavigation("example
 check("allows data: fixtures", () => assert.equal(isBlockedNavigation("data:text/html,<h1>hi</h1>"), false));
 check("allowLocal opt-out unblocks file://", () =>
   assert.equal(isBlockedNavigation("file:///x", true), false));
+
+check("privileged schemes stay blocked after normalisation", () =>
+  assert.equal(isBlockedNavigation("chrome://settings"), true));
+check("private hosts pass by default (local dev servers)", () =>
+  assert.equal(isBlockedNavigation("http://localhost:3000"), false));
+check("blockPrivate refuses loopback, private and metadata hosts", () => {
+  for (const u of ["localhost:3000", "http://10.0.0.5", "http://169.254.169.254/latest", "http://[::1]/", "http://printer.local"]) {
+    assert.equal(isBlockedNavigation(u, false, true), true, u);
+  }
+  assert.equal(isBlockedNavigation("https://example.com", false, true), false);
+});
+
+console.log("\nnormalizeUrl (scheme-less input):");
+
+check("bare domains get https", () => assert.equal(normalizeUrl("example.com/a?b=1"), "https://example.com/a?b=1"));
+check("localhost and loopback get http", () => {
+  assert.equal(normalizeUrl("localhost:3000/x"), "http://localhost:3000/x");
+  assert.equal(normalizeUrl("127.0.0.1:8080"), "http://127.0.0.1:8080");
+});
+check("protocol-relative URLs get https", () => assert.equal(normalizeUrl("//cdn.site/x"), "https://cdn.site/x"));
+check("URLs with a scheme are untouched", () => {
+  for (const u of ["https://a.b", "http://a.b", "data:text/html,x", "about:blank", "file:///x"]) {
+    assert.equal(normalizeUrl(u), u);
+  }
+});
+check("isPrivateHost spots RFC1918 / CGNAT / link-local", () => {
+  for (const h of ["192.168.1.1", "172.20.0.1", "100.64.0.1", "fd00::1"]) assert.equal(isPrivateHost(h), true, h);
+  for (const h of ["8.8.8.8", "172.32.0.1", "example.com"]) assert.equal(isPrivateHost(h), false, h);
+});
 
 console.log("\nelementMatchScore (find):");
 
