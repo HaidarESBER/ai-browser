@@ -60,6 +60,7 @@ function printHelp(): void {
       "",
       `  ${head("ENVIRONMENT")}`,
       row("AI_BROWSER_HEADED=1", "show the browser window (default: headless)"),
+      row("AI_BROWSER_PROFILE=dir", "keep cookies / logins in dir across sessions"),
       row("AI_BROWSER_LIVE=0", "disable the live-view server"),
       row("AI_BROWSER_LIVE_PORT=N", "preferred live-view port (default 7333)"),
       row("AI_BROWSER_ALLOW_LOCAL=1", "allow file:// / privileged navigation"),
@@ -179,11 +180,14 @@ function resetState(): void {
 async function getPage(): Promise<AIPage> {
   if (!page) {
     const headed = process.env.AI_BROWSER_HEADED === "1";
-    browser = await AIBrowser.launch({ headless: !headed });
+    const profile = process.env.AI_BROWSER_PROFILE;
+    browser = profile
+      ? await AIBrowser.launchPersistent(profile, { headless: !headed })
+      : await AIBrowser.launch({ headless: !headed });
     const first = await browser.newPage();
     // S4: if the browser crashes/disconnects, drop the session so the next tool
     // call transparently relaunches instead of throwing forever.
-    first.page.context().browser()?.on("disconnected", resetState);
+    browser.onDisconnect(resetState);
     adoptTab(first);
 
     if (process.env.AI_BROWSER_LIVE !== "0") {
