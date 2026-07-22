@@ -4,7 +4,7 @@
  * Run with: npm run regress
  */
 import assert from "node:assert/strict";
-import { AIBrowser, type AIPage } from "./browser.js";
+import { AIBrowser, AIPage } from "./browser.js";
 
 const browser = await AIBrowser.launch({ headless: true });
 let passed = 0;
@@ -289,6 +289,31 @@ await check("AI_BROWSER_BLOCK_PRIVATE blocks private hosts, including in-page re
   } finally {
     await p.page.close();
   }
+});
+
+console.log("\nnew tabs:");
+
+await check("a target=_blank click reports the new tab and hands it over", async (p) => {
+  const base = await site(p, {
+    "/": `<a href="/docs" target=_blank>Open docs</a>`,
+    "/docs": `<h1>Docs</h1><button>Read more</button>`,
+  });
+  // The popup is a new page in the same context: route it too.
+  await p.page.context().route("http://fixture.test/**", (r) =>
+    r.fulfill({ contentType: "text/html", body: `<h1>Docs</h1><button>Read more</button>` }),
+  );
+  await p.goto(base + "/");
+  const s = await p.snapshot();
+  const r = await p.clickById(s.elements[0]!.id);
+  assert.equal(r.ok, true, r.detail);
+  assert.equal(r.changed, true);
+  assert.deepEqual(r.newTabs, ["http://fixture.test/docs"]);
+  const [tab] = p.takeNewTabs();
+  assert.ok(tab);
+  const docs = new AIPage(tab);
+  assert.equal((await docs.snapshot()).elements[0]?.name, "Read more");
+  assert.equal(p.takeNewTabs().length, 0);
+  await tab.close();
 });
 
 await browser.close();

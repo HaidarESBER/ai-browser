@@ -47,6 +47,7 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx src/test.ts",
     "regress": "tsx src/regress.ts",
+    "regress:mcp": "tsx src/mcp-regress.ts",
     "demo": "tsx src/demo.ts",
     "mcp": "tsx src/mcp.ts",
     "smoke": "tsx src/mcp-smoke.ts",
