@@ -13,6 +13,11 @@ const pages: Record<string, string> = {
   "/": `<a href="/docs" target=_blank>Open docs</a>`,
   "/docs": `<title>Docs</title><button>Read more</button>`,
   "/slow": `<button id=b onclick="window.bought=(window.bought||0)+1">Buy</button>`,
+  "/form": `<label>Size <select><option value=s>Small</option><option value=l>Large</option></select></label>
+    <form onsubmit="event.preventDefault();document.title='sent'"><input aria-label=Query></form>
+    <button onmouseover="this.textContent='Menu open'">Menu</button>
+    <div style="height:3000px"></div><button>Footer</button>
+    <script>setTimeout(()=>document.body.insertAdjacentHTML('beforeend','<p>Ready now</p>'),500)</script>`,
 };
 const site = createServer((req, res) => {
   const body = pages[(req.url ?? "/").split("?")[0]!];
@@ -62,6 +67,37 @@ try {
     assert.match(tabs.text, /\* \[1\] Docs/);
     const back = await call("browser_switch_tab", { index: 0 });
     assert.match(back.text, /name="Open docs"/);
+  });
+
+  console.log("\nnew tools:");
+
+  await check("the server exposes the full tool set", async () => {
+    const { tools } = await client.listTools();
+    for (const name of ["select", "press", "hover", "scroll", "forward", "screenshot", "wait", "tabs", "switch_tab"]) {
+      assert.ok(tools.some((t) => t.name === `browser_${name}`), `browser_${name} missing`);
+    }
+  });
+
+  await check("select / type + press Enter / hover / scroll / wait / screenshot work", async () => {
+    const nav = await call("browser_navigate", { url: base + "/form" });
+    assert.match(nav.text, /options: Small \(s\) \| Large \(l\)/);
+    const sel = await call("browser_select", { id: idOf(nav.text, "Size"), value: "Large" });
+    assert.match(sel.text, /value="l"/);
+    await call("browser_type", { id: idOf(nav.text, "Query"), text: "shoes" });
+    await call("browser_press", { key: "Enter" });
+    assert.equal((await call("browser_evaluate", { js: "document.title" })).text, '"sent"');
+    const hov = await call("browser_hover", { id: idOf(nav.text, "Menu") });
+    assert.match(hov.text, /Menu open/);
+    const scr = await call("browser_scroll", { direction: "down" });
+    assert.match(scr.text, /scroll down succeeded/);
+    const wait = await call("browser_wait", { text: "Ready now" });
+    assert.match(wait.text, /"Ready now" appeared/);
+    const shot = await call("browser_screenshot");
+    assert.equal(shot.res.content[0]?.type, "image");
+    await call("browser_navigate", { url: base + "/" });
+    await call("browser_back");
+    const fwd = await call("browser_forward");
+    assert.match(fwd.text, /Now at .*\/$/);
   });
 
   console.log("\ntimeouts:");

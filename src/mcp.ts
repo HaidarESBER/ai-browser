@@ -12,7 +12,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { readFileSync } from "node:fs";
-import { AIBrowser, AIPage, type Snapshot, type SnapshotDiff } from "./browser.js";
+import { AIBrowser, AIPage, type ActionResult, type Snapshot, type SnapshotDiff } from "./browser.js";
 import { LiveView } from "./live.js";
 
 // Colour helpers — on for a terminal, off when piped or NO_COLOR is set.
@@ -54,9 +54,10 @@ function printHelp(): void {
       `      ${dim('"ecobrowser": { "command": "npx", "args": ["ecobrowser-mcp"] }')}`,
       `    ${yellow("Claude Code")}     ${green("claude mcp add ecobrowser -- npx ecobrowser-mcp")}`,
       "",
-      `  ${head("TOOLS")} ${dim("(13, all prefixed browser_)")}`,
-      `    ${dim("navigate  snapshot  changes  find  read_text  back  click")}`,
-      `    ${dim("type  console  network  evaluate  extract_links  reset")}`,
+      `  ${head("TOOLS")} ${dim("(22, all prefixed browser_)")}`,
+      `    ${dim("navigate  back  forward  snapshot  changes  find  read_text  screenshot")}`,
+      `    ${dim("click  type  select  press  hover  scroll  wait  tabs  switch_tab")}`,
+      `    ${dim("console  network  evaluate  extract_links  reset")}`,
       "",
       `  ${head("ENVIRONMENT")}`,
       row("AI_BROWSER_HEADED=1", "show the browser window (default: headless)"),
@@ -303,6 +304,14 @@ async function actionResponse(p: AIPage, detail: string, since: number): Promise
   return `${detail}${errText}\n\nChanges since your last snapshot:\n${formatDiff(diff)}`;
 }
 
+/** The reply to an interaction: its failure, the tab it opened, or what changed. */
+async function afterAction(p: AIPage, result: ActionResult, since: number) {
+  if (!result.ok) return text(result.detail);
+  const switched = await followNewTabs(p);
+  if (switched) return text(`${result.detail}\n\n${switched}`);
+  return text(await actionResponse(p, result.detail, since));
+}
+
 /** Render only the delta since the last snapshot — the incremental-perception payload. */
 function formatDiff(d: SnapshotDiff): string {
   const lines: string[] = [];
@@ -387,6 +396,49 @@ server.tool("browser_back", "Go back in the browser history.", {}, async () =>
   }),
 );
 
+server.tool("browser_forward", "Go forward in the browser history.", {}, async () =>
+  run(async () => {
+    const p = await getPage();
+    await p.forward();
+    await p.waitUntilReady();
+    return text(`Now at ${p.page.url()}`);
+  }),
+);
+
+server.tool(
+  "browser_screenshot",
+  "Take a screenshot of the visible page. Use only when the structured snapshot isn't enough (layout, images, canvas).",
+  {},
+  async () =>
+    run(async () => {
+      const shot = await (await getPage()).page.screenshot({ type: "jpeg", quality: 70 });
+      return { content: [{ type: "image" as const, data: shot.toString("base64"), mimeType: "image/jpeg" }] };
+    }),
+);
+
+server.tool(
+  "browser_wait",
+  "Wait for text to appear on the page (up to 20 s), or for a number of milliseconds (up to 10 s). Returns what changed.",
+  {
+    text: z.string().optional().describe("Text to wait for"),
+    ms: z.number().int().min(0).max(10_000).optional().describe("Milliseconds to wait, if no text is given"),
+  },
+  async ({ text: wanted, ms }) =>
+    run(async () => {
+      const p = await getPage();
+      if (wanted) {
+        try {
+          await p.page.getByText(wanted).first().waitFor({ state: "visible", timeout: 20_000 });
+        } catch {
+          return text(`"${wanted}" did not appear within 20 s.\n\n${formatDiff(await p.changes())}`);
+        }
+      } else {
+        await new Promise((r) => setTimeout(r, ms ?? 1000));
+      }
+      return text(`${wanted ? `"${wanted}" appeared.` : "Waited."}\n\n${formatDiff(await p.changes())}`);
+    }),
+);
+
 // ---- INTERACT -------------------------------------------------------------
 
 server.tool(
@@ -397,11 +449,7 @@ server.tool(
     run(async () => {
       const p = await getPage();
       const since = Date.now();
-      const result = await p.clickById(id);
-      if (!result.ok) return text(result.detail);
-      const switched = await followNewTabs(p);
-      if (switched) return text(`${result.detail}\n\n${switched}`);
-      return text(await actionResponse(p, result.detail, since));
+      return afterAction(p, await p.clickById(id), since);
     }),
 );
 
@@ -416,9 +464,62 @@ server.tool(
     run(async () => {
       const p = await getPage();
       const since = Date.now();
-      const result = await p.typeById(id, value);
-      if (!result.ok) return text(result.detail);
-      return text(await actionResponse(p, result.detail, since));
+      return afterAction(p, await p.typeById(id, value), since);
+    }),
+);
+
+server.tool(
+  "browser_select",
+  "Choose an option in a dropdown (<select>) by its snapshot id. Pass the option's value or its visible label (the snapshot lists them).",
+  {
+    id: z.string().describe("Element id of the <select>"),
+    value: z.string().describe("Option value or visible label"),
+  },
+  async ({ id, value }) =>
+    run(async () => {
+      const p = await getPage();
+      const since = Date.now();
+      return afterAction(p, await p.selectById(id, value), since);
+    }),
+);
+
+server.tool(
+  "browser_press",
+  "Press a key or chord on the focused element, e.g. 'Enter' to submit, 'Escape' to close a dialog, 'Tab', 'ArrowDown', 'Control+A'.",
+  { key: z.string().describe("Key name, Playwright syntax") },
+  async ({ key }) =>
+    run(async () => {
+      const p = await getPage();
+      const since = Date.now();
+      return afterAction(p, await p.press(key), since);
+    }),
+);
+
+server.tool(
+  "browser_hover",
+  "Hover over an element by its snapshot id (reveals menus and tooltips).",
+  { id: z.string().describe("Element id from a snapshot") },
+  async ({ id }) =>
+    run(async () => {
+      const p = await getPage();
+      const since = Date.now();
+      return afterAction(p, await p.hoverById(id), since);
+    }),
+);
+
+server.tool(
+  "browser_scroll",
+  "Scroll the page (loads lazy / infinite-scroll content). Returns what appeared.",
+  {
+    direction: z.enum(["down", "up"]).describe("Which way to scroll"),
+    pixels: z.number().int().min(1).max(10_000).optional().describe("How far (default 800)"),
+  },
+  async ({ direction, pixels }) =>
+    run(async () => {
+      const p = await getPage();
+      const since = Date.now();
+      const dy = (pixels ?? 800) * (direction === "up" ? -1 : 1);
+      return afterAction(p, await p.scrollBy(dy), since);
     }),
 );
 
