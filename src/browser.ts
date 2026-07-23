@@ -252,8 +252,8 @@ export function computeSnapshotDiff(prev: Snapshot, next: Snapshot): SnapshotDif
 
   const desc = (x: SnapshotElement, other: SnapshotElement) => {
     const parts: string[] = [];
-    if (x.name !== other.name) parts.push(`name="${x.name}"`);
-    if (x.value !== undefined) parts.push(`value="${x.value}"`);
+    if (x.name !== other.name) parts.push(`name=${JSON.stringify(x.name)}`);
+    if (x.value !== undefined) parts.push(`value=${JSON.stringify(x.value)}`);
     if (x.state?.length) parts.push(`[${x.state.join(",")}]`);
     return parts.join(" ") || "∅";
   };
