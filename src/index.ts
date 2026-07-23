@@ -6,6 +6,7 @@
  * server ships as the `ecobrowser-mcp` bin, not as an importable module.
  */
 export {
+  ActionCancelledError,
   AIBrowser,
   AIPage,
   computeSnapshotDiff,

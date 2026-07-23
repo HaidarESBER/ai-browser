@@ -118,6 +118,13 @@ class MaybeAppliedError extends Error {
   }
 }
 
+/** The caller gave up on this action (AIPage.cancel()); it stopped before its next step. */
+export class ActionCancelledError extends Error {
+  constructor() {
+    super("action cancelled");
+  }
+}
+
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -514,6 +521,8 @@ export class AIPage {
   private readonly consoleLog: ConsoleEntry[] = [];
   private readonly networkLog: NetworkEntry[] = [];
   private readonly eventLog: PageEvent[] = [];
+  // Set by cancel(): the in-flight action stops at its next checkpoint.
+  private cancelRequested = false;
   // Tabs / popups this page opened (target=_blank, window.open) not yet taken.
   private readonly openedTabs: Page[] = [];
 
@@ -779,6 +788,19 @@ export class AIPage {
     this.networkLog.length = 0;
   }
 
+  /**
+   * Stop the in-flight action at its next checkpoint — before it retries, heals,
+   * or dispatches a click / keystroke / fill. For callers that time out: without
+   * it, an abandoned action keeps retrying and can land during the NEXT action.
+   */
+  cancel(): void {
+    this.cancelRequested = true;
+  }
+
+  private checkpoint(): void {
+    if (this.cancelRequested) throw new ActionCancelledError();
+  }
+
   /** Tabs/popups opened since the last call, oldest first — wrap one in `new AIPage(tab)` to drive it. */
   takeNewTabs(): Page[] {
     return this.openedTabs.splice(0);
@@ -855,6 +877,7 @@ export class AIPage {
         return !!t && t !== "_self" && t !== "_parent" && t !== "_top";
       });
       const tabsBefore = this.openedTabs.length;
+      this.checkpoint();
       try {
         await sel.click({ timeout: 5000 });
       } catch (err) {
@@ -877,6 +900,7 @@ export class AIPage {
     const result = await this.reliableOnElement(id, "type into", async (sel) => {
       reformatted = null;
       await sel.waitFor({ state: "visible", timeout: 5000 });
+      this.checkpoint();
       await sel.fill(text);
       // Inputs report .value; contenteditable regions their text.
       const actual = await sel.evaluate((el) =>
@@ -917,6 +941,7 @@ export class AIPage {
         Array.from((el as HTMLSelectElement).options).map((o) => [o.value, o.text.trim()]),
       );
       const byLabel = !labels.some(([v]) => v === value) && labels.some(([, l]) => l === value);
+      this.checkpoint();
       await sel.selectOption(byLabel ? { label: value } : value, { timeout: 10000 });
     });
   }
@@ -931,6 +956,7 @@ export class AIPage {
 
   /** Scroll the page; reports whether anything new appeared. Not retried. */
   async scrollBy(dy: number): Promise<ActionResult> {
+    this.cancelRequested = false;
     return this.reliable(`scroll ${dy >= 0 ? "down" : "up"}`, () => this.page.mouse.wheel(0, dy), {
       retries: 0,
     });
@@ -938,6 +964,7 @@ export class AIPage {
 
   /** Press a key (e.g. "Enter", "Escape", "Control+A"). Not retried — Enter twice submits twice. */
   async press(key: string): Promise<ActionResult> {
+    this.cancelRequested = false;
     return this.reliable(`press ${key}`, () => this.page.keyboard.press(key), { retries: 0 });
   }
 
@@ -990,6 +1017,7 @@ export class AIPage {
     for (let attempt = 1; attempt <= retries + 1; attempt++) {
       attempts = attempt;
       try {
+        this.checkpoint();
         await fn();
         await this.waitUntilReady(opts.settleTimeoutMs ?? 1500);
         const after = await this.fingerprint();
@@ -1020,7 +1048,7 @@ export class AIPage {
         };
       } catch (err) {
         lastError = err;
-        if (err instanceof MaybeAppliedError) break;
+        if (err instanceof MaybeAppliedError || err instanceof ActionCancelledError) break;
         if (attempt <= retries) await sleep(backoffMs * attempt);
       }
     }
@@ -1059,8 +1087,9 @@ export class AIPage {
     verb: string,
     act: (target: Locator) => Promise<void>,
   ): Promise<ActionResult> {
+    this.cancelRequested = false;
     const first = await this.reliable(`${verb} ${id}`, () => act(this.sel(id)), { retries: 1 });
-    if (first.ok || first.maybeApplied) return first;
+    if (first.ok || first.maybeApplied || this.cancelRequested) return first;
 
     const newId = await this.healId(id);
     if (!newId) return first;

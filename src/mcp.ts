@@ -119,56 +119,84 @@ let live: LiveView | null = null;
 // Every open tab, in the order they were opened; `page` is the one being driven.
 let tabs: AIPage[] = [];
 
-const TOOL_TIMEOUT_MS = 45_000;
+const TOOL_TIMEOUT_MS = Number(process.env.AI_BROWSER_TOOL_TIMEOUT_MS) || 45_000;
+/** How long a timed-out tool gets to stop at a checkpoint before the session is reset. */
+const CANCEL_GRACE_MS = 15_000;
 
-/**
- * Serialize all tool handlers onto one queue. The server holds a single shared
- * page, so concurrent tool calls (which some clients issue) would otherwise race
- * on navigation / the id counter / the snapshot cache.
- */
-let lock: Promise<unknown> = Promise.resolve();
-function serial<T>(fn: () => Promise<T>): Promise<T> {
-  const run = lock.then(fn, fn);
-  lock = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  return run;
-}
-
-/**
- * Bound a handler so one hung page (e.g. a URL that never reaches networkidle)
- * can't freeze the whole serial queue forever (S2). On timeout the queue is
- * freed; the underlying Playwright op may still finish in the background.
- */
-function withTimeout<T>(fn: () => Promise<T>, ms = TOOL_TIMEOUT_MS): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`tool timed out after ${ms}ms`)), ms);
-    fn().then(
-      (v) => {
+/** Resolve with the promise's outcome, or { timedOut } after ms — never rejects. */
+function settleWithin<T>(
+  p: Promise<T>,
+  ms: number,
+): Promise<{ timedOut: true } | { timedOut: false; ok: true; value: T } | { timedOut: false; ok: false; error: unknown }> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve({ timedOut: true }), ms);
+    p.then(
+      (value) => {
         clearTimeout(timer);
-        resolve(v);
+        resolve({ timedOut: false, ok: true, value });
       },
-      (e) => {
+      (error) => {
         clearTimeout(timer);
-        reject(e);
+        resolve({ timedOut: false, ok: false, error });
       },
     );
   });
 }
 
-/** Every tool runs through this: serialized + time-bounded. */
+/**
+ * Every tool runs through this: serialized + time-bounded. The server holds one
+ * shared page, so concurrent tool calls (which some clients issue) would race on
+ * navigation / the id counter / the snapshot cache; they queue instead.
+ *
+ * On timeout (S2) the work is NOT simply abandoned — an abandoned click keeps
+ * retrying and could land during the next tool call. The page is told to cancel,
+ * and the queue stays held until the work actually stops; if it hasn't within a
+ * grace period, the browser session is reset so nothing can act behind the AI's back.
+ */
+let lock: Promise<unknown> = Promise.resolve();
 function run<T>(fn: () => Promise<T>): Promise<T> {
-  return serial(() => withTimeout(fn));
+  const job = lock.then(async () => {
+    const work = fn();
+    const outcome = await settleWithin(work, TOOL_TIMEOUT_MS);
+    if (!outcome.timedOut) {
+      if (outcome.ok) return outcome.value;
+      throw outcome.error;
+    }
+    page?.cancel();
+    const stopped = await settleWithin(work, CANCEL_GRACE_MS);
+    if (stopped.timedOut) await hardReset();
+    throw new Error(
+      `tool timed out after ${TOOL_TIMEOUT_MS}ms; ${
+        stopped.timedOut ? "the browser session was reset" : "the action was cancelled"
+      }. Take a fresh snapshot before continuing.`,
+    );
+  });
+  lock = job.then(
+    () => undefined,
+    () => undefined,
+  );
+  return job;
 }
 
-/** Drop the current session so the next getPage() relaunches (S4 recovery). */
+/**
+ * Drop the current session so the next getPage() relaunches (S4 recovery).
+ * Closes the browser too: forgetting it would leave a Chromium process behind.
+ */
 function resetState(): void {
+  const old = browser;
   page = null;
   tabs = [];
   browser = null;
   void live?.stop().catch(() => undefined);
   live = null;
+  void old?.close().catch(() => undefined);
+}
+
+/** resetState(), but waits for the browser to actually close. */
+async function hardReset(): Promise<void> {
+  const old = browser;
+  resetState();
+  await old?.close().catch(() => undefined);
 }
 
 /**
@@ -490,20 +518,7 @@ server.tool(
   {},
   async () =>
     run(async () => {
-      try {
-        await live?.stop();
-      } catch {
-        /* ignore */
-      }
-      try {
-        await browser?.close();
-      } catch {
-        /* ignore */
-      }
-      page = null;
-      tabs = [];
-      browser = null;
-      live = null;
+      await hardReset();
       return text("Browser session reset. A fresh session will start on the next action.");
     }),
 );
