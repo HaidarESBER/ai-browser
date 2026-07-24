@@ -11,10 +11,12 @@ function firstText(result: unknown): string {
 }
 
 async function main() {
-  const command = process.platform === "win32" ? "npx.cmd" : "npx";
+  // Spawn node itself (with tsx as a loader) rather than npx: on Windows, closing
+  // the client killed only the npx.cmd wrapper, leaving the server — and its
+  // Chromium — running, so this script never exited.
   const transport = new StdioClientTransport({
-    command,
-    args: ["tsx", "src/mcp.ts"],
+    command: process.execPath,
+    args: ["--import", "tsx", "src/mcp.ts"],
   });
 
   const client = new Client({ name: "smoke-test", version: "0.0.0" });
