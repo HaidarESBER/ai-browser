@@ -39,10 +39,11 @@
   },
   "files": [
     "dist",
+    "scripts",
     "SPEC.md"
   ],
   "scripts": {
-    "postinstall": "playwright install chromium",
+    "postinstall": "node scripts/postinstall.mjs",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "tsx src/test.ts",
