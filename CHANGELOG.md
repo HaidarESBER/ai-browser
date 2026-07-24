@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.2.0 — 2026-07-24
+
+Fixes from a full review of 0.1.5 — each one has a regression test (`npm run regress`, `npm run regress:mcp`).
+
+**Safety**
+- **Fixed: element ids were reused after a navigation.** Every page started again at `e0`, so an id taken from the previous page silently targeted a different element on the next. Ids are now unique for the life of an `AIPage`; cloned nodes get their own.
+- **Fixed: password values leaked into snapshots**, diffs, error messages and the live-view trace. They now read `[redacted]`.
+- **Fixed: self-healing could act on the wrong element** when several shared a name ("Delete"). It now refuses when the match is ambiguous or the page is a different document.
+- **Fixed: a failed click could be repeated.** A click that errors after it may have been dispatched is reported as `maybeApplied` and never retried; `press()` and `scrollBy()` are never retried.
+- **Fixed: the live view was readable by other local processes and, via DNS rebinding, by websites.** It now requires a per-session token and checks the Host header.
+- **Fixed: a timed-out MCP tool kept running** and could act during the next call. Timeouts now cancel the action, and the session is reset if it won't stop.
+- **Added: `AI_BROWSER_BLOCK_PRIVATE=1`** blocks loopback / private-network / metadata hosts, for every request the page makes.
+- **Improved: MCP replies quote page-controlled strings** and declare page content untrusted.
+
+**Perception**
+- **Added: ARIA widgets, contenteditable, `<summary>`, `[tabindex]`, open shadow DOM and iframes** are now in the snapshot and actionable.
+- **Added: dropdown options** in the snapshot; `selectById` accepts a visible label.
+- **Added: `obscured` / `transparent` state flags**; names use `aria-labelledby` and no longer glue a select's options or contain newlines.
+- **Fixed: "no visible page change" for checkbox toggles, opened menus and relabelled buttons** — change detection now hashes element states; the diff reports relabels as changes.
+
+**Behaviour**
+- **Fixed: every action waited up to 8 s** on pages that never go network-idle. Settling is capped at 1.5 s (3 s for `waitUntilReady()`).
+- **Fixed: links that open a new tab were invisible.** Actions report `newTabs`; the MCP server switches to the new tab (`browser_tabs`, `browser_switch_tab`).
+- **Fixed: `goto("example.com")` failed.** Scheme-less URLs get `https://` (`http://` for localhost).
+- **Fixed: typing into masked fields (phone, card) reported failure.** A reformatted value with the same characters counts as typed.
+- **Added: `AIBrowser.launchPersistent(dir)` / `AI_BROWSER_PROFILE`** to stay signed in across runs.
+- **Changed: `hoverById()`, `press()` and `scrollBy()` return an `ActionResult`.**
+
+**MCP server**
+- **Added: `browser_select`, `browser_press`, `browser_hover`, `browser_scroll`, `browser_forward`, `browser_screenshot`, `browser_wait`, `browser_tabs`, `browser_switch_tab`** (22 tools).
+- **Improved: snapshots are capped at 250 elements; `browser_read_text` pages with `offset`** instead of silently truncating.
+- **Fixed: the server reported version 0.1.1**; closing the last tab no longer leaves a Chromium process behind.
+
+**Install**
+- **Fixed: a failed Chromium download failed `npm install`.** The postinstall hook now warns instead, and honours `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD`.
+
 ## 0.1.5 — 2026-07-09
 
 - **Improved: `ecobrowser-mcp --help` is colourised and cleanly laid out** (aligned columns, sectioned; respects `NO_COLOR` and plain-pipes when not a TTY).
