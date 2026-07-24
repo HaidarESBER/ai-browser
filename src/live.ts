@@ -6,8 +6,14 @@
  * trace. This is the "Pleasant" pillar: supervision, not collaboration.
  *
  * Loopback-only, single-user, developer-facing — not a hardened public server.
+ * Still, it shows whatever the AI is browsing (logged-in pages included), so it
+ * is locked to its own origin: every request must carry the per-session token
+ * from the URL start() returns, and a Host header naming this server — which
+ * stops other local processes guessing their way in, and websites from reading
+ * it through DNS rebinding.
  */
-import { createServer, type Server } from "node:http";
+import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AIPage } from "./browser.js";
 
 const PAGE_HTML = `<!doctype html>
@@ -41,11 +47,21 @@ const PAGE_HTML = `<!doctype html>
     status.className = up ? 'live' : 'down';
     status.textContent = up ? '● live' : '● disconnected';
   }
-  img.onerror = () => setStatus(false);
-  function tickFrame() { img.src = '/frame?t=' + Date.now(); }
+  const token = encodeURIComponent(new URLSearchParams(location.search).get('token') || '');
+  // Fetch the next frame only once the last one has loaded, and only while this
+  // tab is visible — a backgrounded viewer costs the AI's browser nothing.
+  let frameTimer = 0;
+  function tickFrame() {
+    clearTimeout(frameTimer);
+    if (!document.hidden) img.src = '/frame?token=' + token + '&t=' + Date.now();
+  }
+  img.onload = () => { frameTimer = setTimeout(tickFrame, 300); };
+  img.onerror = () => { setStatus(false); frameTimer = setTimeout(tickFrame, 2000); };
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { tickFrame(); tickEvents(); } });
   async function tickEvents() {
+    if (document.hidden) return;
     try {
-      const r = await fetch('/events');
+      const r = await fetch('/events?token=' + token);
       if (!r.ok) throw new Error('bad status');
       const evs = await r.json();
       setStatus(true);
@@ -63,7 +79,6 @@ const PAGE_HTML = `<!doctype html>
       }
     } catch { setStatus(false); }
   }
-  setInterval(tickFrame, 300);
   setInterval(tickEvents, 500);
   tickFrame(); tickEvents();
 </script>
@@ -78,6 +93,9 @@ export class LiveView {
   private lastFrame: { buf: Buffer; at: number } | null = null;
   private inflight: Promise<Buffer> | null = null;
 
+  /** Per-session secret every request must carry (?token=…). */
+  readonly token = randomBytes(16).toString("hex");
+
   constructor(
     private page: AIPage,
     private readonly port = 7333,
@@ -89,10 +107,19 @@ export class LiveView {
     this.lastFrame = null;
   }
 
-  /** Start the server; resolves with the URL to open. Falls back across ports if busy. */
+  /** Start the server; resolves with the URL to open (it carries the token). Falls back across ports if busy. */
   start(): Promise<string> {
     this.server = createServer(async (req, res) => {
       try {
+        if (!this.allowed(req)) {
+          res.writeHead(403, { "Content-Type": "text/plain" });
+          res.end("forbidden");
+          return;
+        }
+        // Keep the token out of Referer headers, and the frames out of other origins' <img>.
+        res.setHeader("Referrer-Policy", "no-referrer");
+        res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+        res.setHeader("X-Content-Type-Options", "nosniff");
         const path = (req.url ?? "/").split("?")[0];
         if (path === "/frame") {
           const buf = await this.frame();
@@ -122,6 +149,15 @@ export class LiveView {
     return this.listenWithFallback(first, first + 10);
   }
 
+  /** Right Host header (no DNS rebinding) and the session token. */
+  private allowed(req: IncomingMessage): boolean {
+    const host = (req.headers.host ?? "").toLowerCase();
+    if (host !== `localhost:${this.boundPort}` && host !== `127.0.0.1:${this.boundPort}`) return false;
+    const given = Buffer.from(new URL(req.url ?? "/", "http://x").searchParams.get("token") ?? "");
+    const want = Buffer.from(this.token);
+    return given.length === want.length && timingSafeEqual(given, want);
+  }
+
   /** Try ports [port..maxPort], stepping past any that are already in use (S1). */
   private listenWithFallback(port: number, maxPort: number): Promise<string> {
     return new Promise((resolve, reject) => {
@@ -137,7 +173,7 @@ export class LiveView {
       this.server!.listen(port, "127.0.0.1", () => {
         this.server!.removeListener("error", onError);
         this.boundPort = port;
-        resolve(`http://localhost:${port}`);
+        resolve(`http://localhost:${port}/?token=${this.token}`);
       });
     });
   }
