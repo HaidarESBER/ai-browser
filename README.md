@@ -12,8 +12,8 @@ fast, complete, *verifiable* control of the web. Ships on npm as **`ecobrowser`*
 ![Node](https://img.shields.io/badge/Node-18%2B-339933?logo=node.js&logoColor=white)
 ![Playwright](https://img.shields.io/badge/engine-Playwright%20·%20Chromium-2EAD33?logo=playwright&logoColor=white)
 ![MCP](https://img.shields.io/badge/protocol-MCP%20server-6E56CF)
-![Tools](https://img.shields.io/badge/MCP%20tools-13-6E56CF)
-![Tests](https://img.shields.io/badge/tests-16%20passing-brightgreen)
+![Tools](https://img.shields.io/badge/MCP%20tools-22-6E56CF)
+![Tests](https://img.shields.io/badge/tests-62%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 *Structured (no-pixel) perception · verified self-healing actions · incremental diff perception · a live view to watch it work.*
@@ -58,8 +58,10 @@ It gives an agent a compact, **structured** view of a page (an addressable list 
 | 👁️ **Structured perception** | The AI sees a compact list of interactive elements with stable ids — no screenshot→vision round-trip. |
 | 🎯 **Act by id** | Click/type/select by `e3`, never by guessed CSS selectors or pixel coordinates. |
 | ✅ **Verified actions** | Every action returns *did it work and did the page change* — success / silent no-op / failure, not a guess. |
-| 🩹 **Self-healing** | If an element's id moved (page re-rendered), it re-locates the element by identity and retries. |
-| 🔗 **Durable ids** | An element keeps its id across snapshots, so the AI can reference something it saw steps ago. |
+| 🩹 **Self-healing** | If an element's id moved (page re-rendered), it re-locates the element by identity and retries — and refuses to guess when that identity is ambiguous. |
+| 🔗 **Durable ids** | An element keeps its id across snapshots, so the AI can reference something it saw steps ago. Ids are never reused, even across pages. |
+| 🧩 **Sees the modern web** | ARIA widgets, contenteditable editors, open shadow DOM and iframes; dropdowns list their options; covered elements are flagged `obscured`. |
+| 🗂️ **Tabs** | A link that opens a new tab is reported, and the MCP server switches to it. |
 | ⚡ **Incremental perception** | `changes()` returns only the delta; snapshots are cached until the DOM actually changes. |
 | 🔎 **`find(description)`** | Ask for "the search box" and get just the match — not a whole-page dump. |
 | 🐛 **First-class debugging** | Console logs, page errors, and network requests captured — errors scoped to the action that caused them. |
@@ -73,7 +75,7 @@ It gives an agent a compact, **structured** view of a page (an addressable list 
 ```mermaid
 flowchart TD
     AI["🤖 AI client<br/>Claude Desktop · Cursor · your agent"]
-    MCP["<b>mcp.ts</b><br/>MCP server · 13 tools"]
+    MCP["<b>mcp.ts</b><br/>MCP server · 22 tools"]
     LIVE["<b>live.ts</b><br/>live-view server"]
     ENGINE["<b>browser.ts</b><br/>AIBrowser / AIPage<br/><i>the whole product</i>"]
     CHROME["Chromium<br/>(headless by default)"]
@@ -117,7 +119,9 @@ flowchart LR
     class F bad;
 ```
 
-Perception runs a script *inside the page* that collects interactive elements, stamps each with a **durable** `data-ai-id`, and captures role / name / value / state. A `MutationObserver` tracks a DOM version, so unchanged snapshots are served from **cache** and `changes()` can return just the **delta**.
+Perception runs a script *inside every frame* (and every open shadow root) that collects interactive elements, stamps each with a **durable** `data-ai-id`, and captures role / name / value / state. Password values are never captured — they show as `[redacted]`.
+
+An action that fails *after* it may already have been dispatched (a click whose handler hung, a key press) is reported as `maybeApplied` and **never retried**, so a form is never submitted twice. A `MutationObserver` tracks a DOM version, so unchanged snapshots are served from **cache** and `changes()` can return just the **delta**.
 
 ### The MCP conversation
 
@@ -129,7 +133,7 @@ sequenceDiagram
     AI->>S: initialize
     S-->>AI: capabilities
     AI->>S: tools/list
-    S-->>AI: 13 tools + JSON schemas
+    S-->>AI: 22 tools + JSON schemas
     Note over AI: the model now knows what it can do
     AI->>S: tools/call · browser_navigate {url}
     S->>E: goto() + snapshot()
@@ -153,8 +157,10 @@ It's **an MCP server** because it registers schema-typed tools and answers `init
 npm install ecobrowser
 ```
 
-Chromium is downloaded automatically on install (a `postinstall` hook). If you
-install with `--ignore-scripts`, fetch it manually: `npx playwright install chromium`.
+Chromium is downloaded automatically on install (a `postinstall` hook that never
+fails the install). If you install with `--ignore-scripts`, set
+`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`, or were offline, fetch it manually:
+`npx playwright install chromium`.
 
 ### Option A — as an MCP server (drive it from an AI)
 
@@ -194,7 +200,7 @@ const page = await browser.newPage();
 
 await page.goto("https://example.com");
 
-const snap = await page.snapshot();          // { url, title, elements: [{ id, tag, role, name, value?, state? }] }
+const snap = await page.snapshot();          // { url, title, elements: [{ id, tag, role, name, value?, state?, options? }] }
 const [search] = await page.find("search box");
 
 const result = await page.clickById(snap.elements[0].id);
@@ -206,22 +212,32 @@ console.log(page.console(), page.network()); // first-class debugging
 await browser.close();
 ```
 
+Stay signed in across runs with a persistent profile:
+`AIBrowser.launchPersistent("./profile", { headless: true })`.
+
 ---
 
 ## 🧰 MCP tools
 
-The server exposes **13 tools**; an MCP client discovers them (name + JSON schema) via `tools/list`.
+The server exposes **22 tools**; an MCP client discovers them (name + JSON schema) via `tools/list`.
 
 | Tool | What it does |
 |---|---|
-| `browser_navigate` | Open a URL, return a structured snapshot. |
-| `browser_snapshot` | Structured snapshot of the current page (cached until it changes). |
+| `browser_navigate` | Open a URL (`example.com` works — https is added), return a structured snapshot. |
+| `browser_snapshot` | Structured snapshot of the current page (cached until it changes; capped at 250 elements). |
 | `browser_changes` | **Only** what changed since your last snapshot — cheap re-perception. |
 | `browser_find` | Find interactive elements matching a description; get just the matches. |
-| `browser_read_text` | Visible text of the page. |
-| `browser_back` | Go back in history. |
-| `browser_click` | Click an element by id (verified, self-healing); returns the delta. |
-| `browser_type` | Type into a field by id (verifies the value landed). |
+| `browser_read_text` | Visible text of the page, 5000 characters at a time (`offset` to read on). |
+| `browser_screenshot` | A JPEG of the visible page, for when structure isn't enough. |
+| `browser_back` / `browser_forward` | Move through history. |
+| `browser_click` | Click an element by id (verified, self-healing); returns the delta, or the new tab it opened. |
+| `browser_type` | Type into a field by id (verifies the value landed; tolerates input masks). |
+| `browser_select` | Pick a dropdown option by value or visible label. |
+| `browser_press` | Press a key or chord — `Enter`, `Escape`, `Control+A`. |
+| `browser_hover` | Hover an element (menus, tooltips). |
+| `browser_scroll` | Scroll up/down; returns what appeared (lazy / infinite scroll). |
+| `browser_wait` | Wait for text to appear, or a delay. |
+| `browser_tabs` / `browser_switch_tab` | List open tabs; switch between them. |
 | `browser_console` | Console logs + page errors on the current page. |
 | `browser_network` | Network responses (status, method, url). |
 | `browser_evaluate` | Run a JS **expression** in the page, return the result. |
@@ -264,8 +280,12 @@ Playwright MCP   █████████████████████
 | `AI_BROWSER_LIVE=0` | Disable the live-view server. |
 | `AI_BROWSER_LIVE_PORT=N` | Preferred live-view port (default `7333`, steps to the next free port if busy). |
 | `AI_BROWSER_ALLOW_LOCAL=1` | Allow `file://` / privileged-scheme navigation (blocked by default). |
+| `AI_BROWSER_BLOCK_PRIVATE=1` | Refuse localhost / private-network / cloud-metadata hosts — for navigation and every request the page makes. |
+| `AI_BROWSER_PROFILE=dir` | Keep cookies and logins in `dir` across sessions. |
+| `AI_BROWSER_TOOL_TIMEOUT_MS=N` | Per-tool time budget (default `45000`); a timed-out action is cancelled, not left running. |
+| `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` | Skip the Chromium download at install time. |
 
-**Live view:** when the MCP server starts it also serves a loopback-only page (default `http://localhost:7333`) — a refreshing screenshot plus a colour-coded action trace — so you can watch a headless run.
+**Live view:** when the MCP server starts it also serves a loopback-only page (default `http://localhost:7333/?token=…`) — a refreshing screenshot plus a colour-coded action trace — so you can watch a headless run. Open the exact URL the server prints: it carries a per-session token.
 
 ---
 
@@ -273,6 +293,8 @@ Playwright MCP   █████████████████████
 
 ```bash
 npm test           # unit tests (diff, find, state, url-guard) — no browser needed
+npm run regress    # browser-backed regression tests, one per fixed review finding
+npm run regress:mcp # the same, through a real MCP client against a local fixture site
 npm run build      # compile the publishable package to dist/ (library + MCP bin)
 npm run typecheck  # tsc --noEmit over everything, dev scripts included
 npm run demo       # exercises the engine directly (headed; AI_BROWSER_HEADED=0 for headless)
@@ -293,18 +315,22 @@ npm run mcp        # run the MCP server on stdio
 src/
   index.ts         # public package entry — re-exports the engine + LiveView
   browser.ts       # the core engine — AIBrowser / AIPage (this is the whole product)
-  mcp.ts           # MCP server: registers the engine's methods as 13 tools (the ecobrowser-mcp bin)
+  mcp.ts           # MCP server: registers the engine's methods as 22 tools (the ecobrowser-mcp bin)
   live.ts          # live-view server (screenshot + action trace)
   demo.ts          # in-code engine demo (5 parts, incl. self-healing)
   mcp-smoke.ts     # end-to-end MCP client test
   live-smoke.ts    # live-view endpoint test
   bench-h2h.ts     # head-to-head benchmark vs Playwright MCP
   test.ts          # unit tests for the pure logic
+  regress.ts       # browser-backed regression tests
+  mcp-regress.ts   # MCP-level regression tests
+scripts/
+  postinstall.mjs  # fetches Chromium on install; never fails the install
 tsconfig.build.json # build config — compiles only the public surface to dist/
 SPEC.md            # full technical specification, north star, roadmap
 ```
 
-Only `dist/` (plus README, SPEC, LICENSE) ships in the npm tarball — the dev scripts stay in the repo.
+Only `dist/` and `scripts/` (plus README, SPEC, LICENSE) ship in the npm tarball — the dev scripts stay in the repo.
 
 ---
 
@@ -312,9 +338,11 @@ Only `dist/` (plus README, SPEC, LICENSE) ships in the npm tarball — the dev s
 
 Because it's a **downloadable tool you run yourself**, how it's used is your responsibility. Built-in guards:
 
-- **Loopback-only live view** — never exposed to the LAN; the trace is rendered XSS-safely (`textContent`, never `innerHTML`).
-- **Navigation guard** — `file://`, `chrome://`, `javascript:` and other privileged schemes blocked by default (`AI_BROWSER_ALLOW_LOCAL=1` to opt out).
-- **Bounded & recoverable** — capped logs, per-tool timeouts, automatic crash recovery, graceful shutdown, port fallback.
+- **Locked-down live view** — loopback-only, a per-session token on every request, and a Host-header check against DNS rebinding; the trace is rendered XSS-safely (`textContent`, never `innerHTML`).
+- **Navigation guard** — `file://`, `chrome://`, `javascript:` and other privileged schemes blocked by default (`AI_BROWSER_ALLOW_LOCAL=1` to opt out); `AI_BROWSER_BLOCK_PRIVATE=1` also blocks private-network hosts.
+- **No secrets in the model's context** — password field values are redacted from snapshots, diffs, errors and the trace.
+- **Page content is data** — names, values and titles are JSON-quoted in MCP replies so a page can't forge extra lines, and the server tells the client that page content is untrusted.
+- **Bounded & recoverable** — capped logs and snapshots, per-tool timeouts that cancel the action, automatic crash recovery, graceful shutdown, port fallback.
 
 Deliberately **not** in scope: multi-tenant hosting, auth/session isolation between users, or sandboxing `browser_evaluate` (which runs arbitrary JS in the page — appropriate only for sites you trust). Point it at your own or authorized sites.
 

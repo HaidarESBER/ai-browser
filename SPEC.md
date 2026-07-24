@@ -165,7 +165,7 @@ page.on("console", (log) => { /* stream / react to page errors */ });
 | M0 | **Spike** | Launch Chromium via Playwright; compact `snapshot()`; click by element id | ✅ done |
 | M1 | **Core actions** | Full action set + `extractLinks()` + console/network taps | ✅ done |
 | — | **Reliability layer** | Smart-wait + retry + effect verification + `ActionResult` + **self-healing** | ✅ done |
-| M3 | **MCP server** | 13 MCP tools; `npx` launch; tested via a real MCP client | ✅ done |
+| M3 | **MCP server** | 13 MCP tools (22 as of 0.2.0); `npx` launch; tested via a real MCP client | ✅ done |
 | M4 | **Speed pass** | Caching + **diff-based perception**; benchmarked vs Playwright MCP | ✅ done |
 | M5 | **Observability** | Loopback live view (screenshot + action trace) | ✅ done |
 | — | **AI-friendliness** | `find()`, state flags, diff-by-default, action-scoped console, durable ids | ✅ done |
