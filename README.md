@@ -373,6 +373,11 @@ See [`SPEC.md`](./SPEC.md) for the full specification and north star.
 </div>
 
 
+## 📝 Write-ups
+
+- [Making browser perception cheap for LLM agents: snapshots, caching and diffs](https://dev.to/haidaresber/making-browser-perception-cheap-for-llm-agents-snapshots-caching-and-diffs-3inm)
+- [Self-healing browser actions for AI agents (and why they must refuse to guess)](https://dev.to/haidaresber/self-healing-browser-actions-for-ai-agents-and-why-they-must-refuse-to-guess-2ko1)
+
 ---
 
 ## 👤 Author
