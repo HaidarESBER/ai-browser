@@ -50,6 +50,12 @@ It gives an agent a compact, **structured** view of a page (an addressable list 
 
 > ⚠️ **Scope & honesty.** This is a fast, local, **single-user developer tool**, built to be pointed at your own or authorized sites. It's young — thoroughly tested on its own paths, but not battle-hardened across thousands of real websites the way mature tools are. See [Security & scope](#-security--scope).
 
+### See it in action
+
+The **live view** is a loopback-only page that shows what a headless run is doing: a refreshing screenshot plus a colour-coded action trace. Real capture below (the AI navigated to example.com and clicked its first link):
+
+![ecobrowser live view: refreshing page screenshot and action trace](docs/screenshot-live-view.png)
+
 ---
 
 ## ✨ Highlights
@@ -73,26 +79,7 @@ It gives an agent a compact, **structured** view of a page (an addressable list 
 
 ## 🏗 Architecture
 
-```mermaid
-flowchart TD
-    AI["🤖 AI client<br/>Claude Desktop · Cursor · your agent"]
-    MCP["<b>mcp.ts</b><br/>MCP server · 22 tools"]
-    LIVE["<b>live.ts</b><br/>live-view server"]
-    ENGINE["<b>browser.ts</b><br/>AIBrowser / AIPage<br/><i>the whole product</i>"]
-    CHROME["Chromium<br/>(headless by default)"]
-    HUMAN["🧑 human<br/>watches &amp; supervises"]
-
-    AI -- "JSON-RPC 2.0 / stdio" --> MCP
-    MCP -- "method calls" --> ENGINE
-    ENGINE -- "Chrome DevTools Protocol" --> CHROME
-    ENGINE -- "events + frames" --> LIVE
-    LIVE -- "screenshot + action trace" --> HUMAN
-
-    classDef eng fill:#6E56CF,stroke:#4C3A9E,color:#fff;
-    classDef srv fill:#1e2a3a,stroke:#89b4fa,color:#cdd6f4;
-    class ENGINE eng;
-    class MCP,LIVE srv;
-```
+![ecobrowser architecture](docs/architecture.svg)
 
 **One engine, two front doors.** All the real logic lives in `browser.ts`. `mcp.ts` is a thin adapter that exposes the engine's methods as protocol tools; `live.ts` is a read-only window for a human. The same engine could be wrapped as a CLI or REST API — MCP is just one adapter.
 
@@ -102,23 +89,7 @@ flowchart TD
 
 ### Perception → action → verification
 
-```mermaid
-flowchart LR
-    A["act by id<br/>(click / type / select)"] --> B{"element<br/>found?"}
-    B -- yes --> C["smart-wait<br/>+ act"]
-    B -- "no · id moved" --> H["🩹 self-heal:<br/>re-locate by identity"]
-    H --> C
-    C --> D{"effect<br/>verified?"}
-    D -- yes --> OK["✅ ActionResult<br/>ok · changed?"]
-    D -- "no · error" --> R{"retries<br/>left?"}
-    R -- yes --> C
-    R -- no --> F["⚠️ ActionResult<br/>fail + heal hint"]
-
-    classDef ok fill:#1e3a2e,stroke:#a6e3a1,color:#a6e3a1;
-    classDef bad fill:#3a1e26,stroke:#f38ba8,color:#f38ba8;
-    class OK ok;
-    class F bad;
-```
+![Verified, self-healing action flow](docs/action-flow.svg)
 
 Perception runs a script *inside every frame* (and every open shadow root) that collects interactive elements, stamps each with a **durable** `data-ai-id`, and captures role / name / value / state. Password values are never captured — they show as `[redacted]`.
 
@@ -385,3 +356,9 @@ See [`SPEC.md`](./SPEC.md) for the full specification and north star.
 **Built by [Haidar Esber](https://haidaresber.github.io)** — Lebanese software & web developer based in France.
 
 [Portfolio](https://haidaresber.github.io) · [GitHub](https://github.com/HaidarESBER) · [LinkedIn](https://www.linkedin.com/in/haidaresber)
+
+---
+
+## 📄 License
+
+[MIT](./LICENSE) © 2026 Haidar Esber
