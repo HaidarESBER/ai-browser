@@ -14,7 +14,6 @@ fast, complete, *verifiable* control of the web. Ships on npm as **`ecobrowser`*
 ![MCP](https://img.shields.io/badge/protocol-MCP%20server-6E56CF)
 ![Tools](https://img.shields.io/badge/MCP%20tools-22-6E56CF)
 ![CI](https://github.com/HaidarESBER/ai-browser/actions/workflows/ci.yml/badge.svg)
-![Tests](https://img.shields.io/badge/tests-62%20passing-brightgreen) <!-- 34 unit + 21 regress + 7 MCP regress -->
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 *Structured (no-pixel) perception · verified self-healing actions · incremental diff perception · a live view to watch it work.*
